@@ -1,0 +1,30 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Environments
+.venv/
+venv/
+ENV/
+env/
+
+# Environment variables
+.env
+!.env.example
+
+# Logs & cache
+*.log
+.pytest_cache/
+.coverage
+
+# OS generated files
+.DS_Store
+Thumbs.db
+
+prompt.md
+
+
+specs
+.specify
+.agents
