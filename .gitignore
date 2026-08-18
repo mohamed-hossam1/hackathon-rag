@@ -15,7 +15,6 @@ env/
 
 # Logs & cache
 *.log
-.pytest_cache/
 .coverage
 
 # OS generated files
