@@ -62,6 +62,7 @@ async def lifespan(app: FastAPI):
     embedding_service = EmbeddingService()
     vector_store = QdrantVectorStore()
     document_store = DocumentStore()
+    document_store.load_from_supabase()
 
     # Parsers
     parsers = {

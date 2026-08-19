@@ -37,3 +37,36 @@ CREATE TABLE IF NOT EXISTS evaluation_reports (
 -- Indices for fast querying by query_id
 CREATE INDEX IF NOT EXISTS idx_retrieval_traces_query_id ON retrieval_traces(query_id);
 CREATE INDEX IF NOT EXISTS idx_evaluation_reports_query_id ON evaluation_reports(query_id);
+
+-- 4. Table for Uploaded Document Metadata & Ingestion Status
+CREATE TABLE IF NOT EXISTS documents (
+    document_id VARCHAR(255) PRIMARY KEY,
+    filename VARCHAR(255) NOT NULL,
+    file_type VARCHAR(50) NOT NULL,
+    file_size_bytes BIGINT NOT NULL,
+    storage_path TEXT NOT NULL,
+    status VARCHAR(50) NOT NULL,            -- 'queued', 'processing', 'completed', 'failed'
+    total_pages INT DEFAULT NULL,
+    error_message TEXT DEFAULT NULL,
+    upload_timestamp TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- 5. Table for Document Chunks (for persistent BM25 re-hydration and retrieval)
+CREATE TABLE IF NOT EXISTS document_chunks (
+    chunk_id VARCHAR(255) PRIMARY KEY,
+    document_id VARCHAR(255) REFERENCES documents(document_id) ON DELETE CASCADE,
+    text TEXT NOT NULL,
+    filename VARCHAR(255) NOT NULL,
+    page_start INT NOT NULL,
+    page_end INT NOT NULL,
+    chunk_index INT NOT NULL,
+    chunker_type VARCHAR(50) NOT NULL,      -- 'semantic', 'recursive'
+    method VARCHAR(50) DEFAULT NULL,
+    start_char INT NOT NULL,
+    end_char INT NOT NULL,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_document_chunks_document_id ON document_chunks(document_id);
+CREATE INDEX IF NOT EXISTS idx_document_chunks_chunker_type ON document_chunks(chunker_type);
+

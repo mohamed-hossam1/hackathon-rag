@@ -1,5 +1,6 @@
 import logging
 from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi.responses import StreamingResponse
 
 from src.api.schemas import ErrorResponse, RAGRequest
 from src.models.response import RAGResponse
@@ -66,3 +67,36 @@ async def query_rag(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Internal server error"
         ) from exc
+
+
+@router.post(
+    "/rag/stream",
+    status_code=status.HTTP_200_OK,
+    responses={
+        400: {"model": ErrorResponse, "description": "Bad Request — empty query"},
+        503: {"model": ErrorResponse, "description": "Service Unavailable — dependency failure"},
+        500: {"model": ErrorResponse, "description": "Internal Server Error"}
+    }
+)
+async def query_rag_stream(
+    request: RAGRequest,
+    rag_service: RAGService = Depends(get_rag_service)
+) -> StreamingResponse:
+    """Streams medical RAG pipeline answer token-by-token using Server-Sent Events (SSE)."""
+    if not request.query or not request.query.strip():
+        logger.warning("Rejected empty streaming RAG query request")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Query must not be empty"
+        )
+
+    try:
+        generator = rag_service.query_stream(query_text=request.query, dev=request.dev)
+        return StreamingResponse(generator, media_type="text/event-stream")
+    except Exception as exc:
+        logger.error(f"Unexpected exception during /rag/stream query: {exc}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Internal server error"
+        ) from exc
+

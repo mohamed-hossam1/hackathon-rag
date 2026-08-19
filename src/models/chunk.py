@@ -19,7 +19,8 @@ class Chunk(BaseModel):
     page_end: int = Field(..., ge=1, description="Last page this chunk covers (1-indexed)")
     chunk_index: int = Field(..., ge=0, description="Sequential index within strategy output")
     chunker_type: ChunkerType = Field(..., description="Chunking strategy used: semantic or recursive")
-    method: str = Field(..., description="Text extraction method of source document: native or ocr")
+    method: str = Field(default="native", description="Text extraction method of source document: native or ocr")
+
     start_char: int = Field(..., ge=0, description="Start character offset in normalized document text")
     end_char: int = Field(..., description="End character offset in normalized document text")
 

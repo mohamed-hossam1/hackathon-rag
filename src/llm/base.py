@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from typing import Optional
+from typing import Iterator, Optional
 
 
 class LLMService(ABC):
@@ -25,3 +25,26 @@ class LLMService(ABC):
             Generated text string response from the LLM.
         """
         pass
+
+    @abstractmethod
+    def generate_stream(
+        self,
+        prompt: str,
+        system_prompt: Optional[str] = None,
+        temperature: float = 0.0,
+        max_tokens: Optional[int] = None
+    ) -> Iterator[str]:
+
+        """Generates text from an LLM as a stream of text chunk tokens.
+
+        Args:
+            prompt: User message / query prompt text.
+            system_prompt: Optional system instruction prompt.
+            temperature: Sampling temperature (0.0 for deterministic output).
+            max_tokens: Optional token generation limit.
+
+        Yields:
+            Generated text chunk tokens from the LLM.
+        """
+        pass
+

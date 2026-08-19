@@ -1,3 +1,4 @@
+import json
 import logging
 import re
 from typing import Dict, List, Optional
@@ -146,12 +147,15 @@ class RAGService:
         context_prompt = "\n".join(context_str_blocks)
         user_prompt = f"Context:\n{context_prompt}\n\nUser Question:\n{query_text}"
 
-        # Step 5: Generate Answer
-        raw_answer = self.llm_service.generate(
-            prompt=user_prompt,
-            system_prompt=RAG_SYSTEM_PROMPT,
-            temperature=0.0
+        # Step 5: Generate Answer via streaming
+        raw_answer = "".join(
+            self.llm_service.generate_stream(
+                prompt=user_prompt,
+                system_prompt=RAG_SYSTEM_PROMPT,
+                temperature=0.0
+            )
         )
+
 
         # Step 6: Parse Citations
         citations = self._parse_citations(raw_answer, chunks_map)
@@ -209,6 +213,149 @@ class RAGService:
             disclaimer=DEFAULT_MEDICAL_DISCLAIMER,
             dev_trace=dev_trace_obj
         )
+
+    async def query_stream(self, query_text: str, dev: bool = False):
+        """Executes full RAG query pipeline and yields SSE events as answer is generated."""
+        if not query_text.strip():
+            resp = RAGResponse(
+                answer=ABSTENTION_MESSAGE,
+                citations=[],
+                evidence_score=0.0,
+                confidence_label=ConfidenceLabel.INSUFFICIENT,
+                abstained=True,
+                disclaimer=DEFAULT_MEDICAL_DISCLAIMER
+            )
+            yield f"event: final\ndata: {resp.model_dump_json()}\n\n"
+            return
+
+        logger.info(f"Executing RAG query stream: '{query_text[:50]}...' (dev={dev})")
+
+        # Step 1: Tri-Hybrid Retrieval
+        sem_results = self.semantic_retriever.retrieve(query_text, top_k=self.top_k_retrieval)
+        rec_results = self.recursive_retriever.retrieve(query_text, top_k=self.top_k_retrieval)
+        bm25_results = self.bm25_retriever.retrieve(query_text, top_k=self.top_k_retrieval)
+
+        # Step 2: Union & Deduplication
+        all_candidates = sem_results + rec_results + bm25_results
+        dedup_candidates = self.deduplicator.deduplicate(all_candidates)
+
+        # Step 3: Reranking
+        reranker_results = self.reranker.rerank(query_text, dedup_candidates, top_k=self.top_k_rerank)
+        selected_context = reranker_results[:self.top_k_rerank]
+
+        if not selected_context:
+            logger.warning("No context chunks found; yielding abstention response")
+            abstain_resp = self._build_abstention_response(
+                dev=dev,
+                query_text=query_text,
+                sem_results=sem_results,
+                rec_results=rec_results,
+                bm25_results=bm25_results,
+                dedup_candidates=dedup_candidates,
+                reranker_results=reranker_results,
+                selected_context=[]
+            )
+            yield f"event: final\ndata: {abstain_resp.model_dump_json()}\n\n"
+            return
+
+        # Initial SSE Event: metadata
+        metadata_event = {
+            "selected_chunks_count": len(selected_context),
+            "status": "context_retrieved"
+        }
+        yield f"event: metadata\ndata: {json.dumps(metadata_event)}\n\n"
+
+        # Step 4: Assemble Prompt Context
+        context_str_blocks = []
+        chunks_map: Dict[str, Chunk] = {}
+
+        for idx, rerank_item in enumerate(selected_context, 1):
+            chunk = rerank_item.chunk
+            chunks_map[chunk.chunk_id] = chunk
+            context_str_blocks.append(
+                f"--- Context Chunk #{idx} ---\n"
+                f"ChunkID: {chunk.chunk_id}\n"
+                f"Filename: {chunk.filename}\n"
+                f"Page: {chunk.page_start}\n"
+                f"Text:\n{chunk.text}\n"
+            )
+
+        context_prompt = "\n".join(context_str_blocks)
+        user_prompt = f"Context:\n{context_prompt}\n\nUser Question:\n{query_text}"
+
+        # Step 5: Stream LLM Generation
+        raw_answer_chunks = []
+        for token in self.llm_service.generate_stream(
+            prompt=user_prompt,
+            system_prompt=RAG_SYSTEM_PROMPT,
+            temperature=0.0
+        ):
+            raw_answer_chunks.append(token)
+            token_event = {"delta": token}
+            yield f"event: token\ndata: {json.dumps(token_event)}\n\n"
+        raw_answer = "".join(raw_answer_chunks)
+
+
+        # Step 6: Parse Citations
+        citations = self._parse_citations(raw_answer, chunks_map)
+
+        # Step 7: Validate Citations & Evidence Scoring
+        validations = self.citation_validator.validate_citations(citations, chunks_map)
+        evidence_score = self.citation_validator.compute_evidence_score(validations)
+        confidence_label = self.citation_validator.get_confidence_label(evidence_score, validations)
+
+        # Step 8: Abstention Check
+        is_abstention_text = ABSTENTION_MESSAGE.lower() in raw_answer.lower()
+        if is_abstention_text or evidence_score < self.evidence_threshold:
+            logger.info(f"Abstaining: evidence_score={evidence_score:.2f} < threshold={self.evidence_threshold}")
+            abstain_resp = self._build_abstention_response(
+                dev=dev,
+                query_text=query_text,
+                sem_results=sem_results,
+                rec_results=rec_results,
+                bm25_results=bm25_results,
+                dedup_candidates=dedup_candidates,
+                reranker_results=reranker_results,
+                selected_context=selected_context,
+                validations=validations
+            )
+            yield f"event: final\ndata: {abstain_resp.model_dump_json()}\n\n"
+            return
+
+        dev_trace_obj = None
+        if dev:
+            self.supabase_service.save_dev_trace(
+                query_text=query_text,
+                abstained=False,
+                evidence_score=evidence_score,
+                semantic_chunks=sem_results,
+                recursive_chunks=rec_results,
+                bm25_chunks=bm25_results,
+                reranker_chunks=reranker_results
+            )
+            dev_trace_obj = DevTrace(
+                semantic_results=sem_results,
+                recursive_results=rec_results,
+                bm25_results=bm25_results,
+                deduplicated_candidates=dedup_candidates,
+                reranker_results=reranker_results,
+                selected_context=selected_context,
+                citation_validations=validations
+            )
+
+        final_response = RAGResponse(
+            answer=raw_answer,
+            citations=citations,
+            citation_validations=validations if dev else None,
+            evidence_score=evidence_score,
+            confidence_label=confidence_label,
+            abstained=False,
+            disclaimer=DEFAULT_MEDICAL_DISCLAIMER,
+            dev_trace=dev_trace_obj
+        )
+
+        yield f"event: final\ndata: {final_response.model_dump_json()}\n\n"
+
 
     def _parse_citations(self, answer_text: str, chunks_map: Dict[str, Chunk]) -> List[Citation]:
         """Extracts structured Citation objects from inline citation tags in the answer."""

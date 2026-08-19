@@ -244,3 +244,111 @@ class SupabaseService:
         except Exception as err:
             logger.error(f"Error fetching evaluation reports for query_id={query_id}: {err}")
             return []
+
+    def save_document(self, document_dict: Dict[str, Any]) -> bool:
+        """Saves a document metadata record into Supabase."""
+        if not self.is_configured:
+            return False
+
+        try:
+            headers = self._get_headers()
+            headers["Prefer"] = "resolution=merge-duplicates"
+            resp = httpx.post(
+                f"{self.url}/rest/v1/documents",
+                headers=headers,
+                json=document_dict,
+                timeout=10.0
+            )
+            resp.raise_for_status()
+            logger.info(f"Saved document '{document_dict.get('document_id')}' to Supabase")
+            return True
+        except Exception as err:
+            logger.error(f"Error saving document to Supabase: {err}")
+            return False
+
+    def update_document_status(
+        self,
+        document_id: str,
+        status: str,
+        total_pages: Optional[int] = None,
+        error_message: Optional[str] = None
+    ) -> bool:
+        """Updates document status, total pages, and error message in Supabase."""
+        if not self.is_configured:
+            return False
+
+        try:
+            payload: Dict[str, Any] = {"status": status}
+            if total_pages is not None:
+                payload["total_pages"] = total_pages
+            if error_message is not None:
+                payload["error_message"] = error_message
+
+            resp = httpx.patch(
+                f"{self.url}/rest/v1/documents?document_id=eq.{document_id}",
+                headers=self._get_headers(),
+                json=payload,
+                timeout=10.0
+            )
+            resp.raise_for_status()
+            logger.info(f"Updated status of document '{document_id}' to '{status}' in Supabase")
+            return True
+        except Exception as err:
+            logger.error(f"Error updating document status in Supabase: {err}")
+            return False
+
+    def save_chunks(self, chunks_dicts: List[Dict[str, Any]]) -> bool:
+        """Saves a batch of chunk records into Supabase."""
+        if not self.is_configured or not chunks_dicts:
+            return False
+
+        try:
+            headers = self._get_headers()
+            headers["Prefer"] = "resolution=merge-duplicates"
+            resp = httpx.post(
+                f"{self.url}/rest/v1/document_chunks",
+                headers=headers,
+                json=chunks_dicts,
+                timeout=15.0
+            )
+            resp.raise_for_status()
+            logger.info(f"Saved {len(chunks_dicts)} chunks to Supabase")
+            return True
+        except Exception as err:
+            logger.error(f"Error saving chunks to Supabase: {err}")
+            return False
+
+    def get_all_documents(self) -> List[Dict[str, Any]]:
+        """Fetches all documents from Supabase ordered by upload_timestamp descending."""
+        if not self.is_configured:
+            return []
+
+        try:
+            resp = httpx.get(
+                f"{self.url}/rest/v1/documents?select=*&order=upload_timestamp.desc",
+                headers=self._get_headers(),
+                timeout=10.0
+            )
+            resp.raise_for_status()
+            return resp.json()
+        except Exception as err:
+            logger.error(f"Error fetching all documents from Supabase: {err}")
+            return []
+
+    def get_all_chunks(self) -> List[Dict[str, Any]]:
+        """Fetches all document chunks from Supabase for BM25 re-hydration."""
+        if not self.is_configured:
+            return []
+
+        try:
+            resp = httpx.get(
+                f"{self.url}/rest/v1/document_chunks?select=*&order=chunk_index.asc",
+                headers=self._get_headers(),
+                timeout=15.0
+            )
+            resp.raise_for_status()
+            return resp.json()
+        except Exception as err:
+            logger.error(f"Error fetching all chunks from Supabase: {err}")
+            return []
+
