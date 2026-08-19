@@ -88,7 +88,7 @@ class ValidateCitationsResponse(BaseModel):
 
 class EvaluateRequest(BaseModel):
     """Request payload for POST /evaluate endpoint."""
-    queries: List[str] = Field(..., min_items=1, description="List of evaluation queries to run")
+    queries: List[str] = Field(..., min_length=1, description="List of evaluation queries to run")
     top_k: int = Field(default=5, ge=1, description="Top-K context size for evaluation")
 
 
