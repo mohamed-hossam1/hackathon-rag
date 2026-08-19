@@ -397,9 +397,9 @@ class RAGService:
         """Extracts structured Citation objects from inline citation tags in the answer."""
         citations: List[Citation] = []
 
-        # Matches [Doc: filename, Page: page_num, ChunkID: chunk_id]
+        # Matches [Doc: filename, Page: page_num, ChunkID: chunk_id] or 【Doc: filename, Page: page_num, ChunkID: chunk_id】
         citation_pattern = re.compile(
-            r"\[Doc:\s*(?P<filename>[^,]+),\s*Page:\s*(?P<page>\d+),\s*ChunkID:\s*(?P<chunk_id>[^\]]+)\]"
+            r"[\[【]Doc:\s*(?P<filename>[^,]+),\s*Page:\s*(?P<page>\d+),\s*ChunkID:\s*(?P<chunk_id>[^\]】]+)[\]】]"
         )
 
         lines = answer_text.split("\n")
@@ -420,7 +420,7 @@ class RAGService:
                 # Extract preceding sentence as claim text
                 claim_text = line_str[: match.start()].strip()
                 # Clean preceding citation tags from claim text if multiple citations on line
-                claim_text = re.sub(r"\[Doc:.*\]", "", claim_text).strip()
+                claim_text = re.sub(r"[\[【]Doc:.*?[\]】]", "", claim_text).strip()
                 if not claim_text:
                     claim_text = line_str
 
