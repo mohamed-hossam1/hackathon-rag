@@ -211,7 +211,7 @@ class RAGService:
         return RAGResponse(
             answer=raw_answer,
             citations=citations,
-            citation_validations=validations if dev else None,
+            citation_validations=validations,
             evidence_score=evidence_score,
             confidence_label=confidence_label,
             abstained=False,
@@ -356,7 +356,7 @@ class RAGService:
         final_response = RAGResponse(
             answer=raw_answer,
             citations=citations,
-            citation_validations=validations if dev else None,
+            citation_validations=validations,
             evidence_score=evidence_score,
             confidence_label=confidence_label,
             abstained=False,
@@ -478,7 +478,7 @@ class RAGService:
         return RAGResponse(
             answer=ABSTENTION_MESSAGE,
             citations=[],
-            citation_validations=validations if dev else None,
+            citation_validations=validations,
             evidence_score=0.0,
             confidence_label=ConfidenceLabel.INSUFFICIENT,
             abstained=True,
