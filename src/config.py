@@ -37,8 +37,8 @@ class AppConfig(BaseSettings):
     # Chunking & Document Processing
     MAX_FILE_SIZE_MB: int = 50
     SEMANTIC_CHUNK_THRESHOLD: float = 0.50
-    RECURSIVE_CHUNK_SIZE: int = 512
-    RECURSIVE_CHUNK_OVERLAP: int = 64
+    RECURSIVE_CHUNK_SIZE: int = 1500
+    RECURSIVE_CHUNK_OVERLAP: int = 300
 
     # Retrieval, Reranking & Evaluation Thresholds
     RETRIEVAL_TOP_K: int = 10
