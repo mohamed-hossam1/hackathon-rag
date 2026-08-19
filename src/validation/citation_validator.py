@@ -215,7 +215,6 @@ class CitationValidator:
             elif val.status == "contradicts":
                 # Contradiction incurs a severe penalty on earned score
                 earned_score -= (weight * 1.5)
-            # 'not_supported' yields 0.0 added score
 
         if total_weight <= 0.0:
             return 0.0
