@@ -1,8 +1,11 @@
 import logging
 from typing import Any, Dict, List, Optional
-from fastapi import APIRouter, HTTPException, Path, Query
+from fastapi import APIRouter, Depends, HTTPException, Path, Query
+
 from pydantic import BaseModel, Field
 
+from src.api.schemas import ErrorResponse
+from src.auth import Principal, require_admin
 from src.db.supabase_service import SupabaseService
 from src.evaluation.llm_judge import LLMJudge
 from src.models.chunk import Chunk, ChunkerType
@@ -67,7 +70,10 @@ class QueryEvaluationReport(BaseModel):
     summary="List Logged Dev Queries",
     description="Returns a list of all query runs logged in Supabase during dev mode."
 )
-async def list_logged_queries(limit: int = Query(default=50, ge=1, le=200)):
+async def list_logged_queries(
+    limit: int = Query(default=50, ge=1, le=200),
+    admin: Principal = Depends(require_admin),
+):
     if not supabase_service.is_configured:
         raise HTTPException(
             status_code=503,
@@ -84,7 +90,10 @@ async def list_logged_queries(limit: int = Query(default=50, ge=1, le=200)):
     summary="Get Full Retrieval Trace for a Query",
     description="Returns stored top 10 chunks per retrieval strategy (semantic, recursive, bm25, reranker) with chunk_id and text content."
 )
-async def get_query_trace(query_id: str = Path(..., description="UUID of logged dev query")):
+async def get_query_trace(
+    query_id: str = Path(..., description="UUID of logged dev query"),
+    admin: Principal = Depends(require_admin),
+):
     if not supabase_service.is_configured:
         raise HTTPException(
             status_code=503,
@@ -107,7 +116,11 @@ async def get_query_trace(query_id: str = Path(..., description="UUID of logged 
     summary="Run AI-as-a-Judge Evaluation across Strategies",
     description="Evaluates top 5 chunks per strategy using exactly 4 batch LLM calls. Computes Precision@3 and Precision@5 and saves to Supabase."
 )
-async def evaluate_query_retrieval(query_id: str = Path(..., description="UUID of logged dev query")):
+async def evaluate_query_retrieval(
+    query_id: str = Path(..., description="UUID of logged dev query"),
+    admin: Principal = Depends(require_admin),
+):
+
     if not supabase_service.is_configured:
         raise HTTPException(
             status_code=503,

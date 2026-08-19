@@ -3,6 +3,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import StreamingResponse
 
 from src.api.schemas import ErrorResponse, RAGRequest
+from src.auth import Principal, enforce_rag_dev_policy, get_current_principal
 from src.models.response import RAGResponse
 from src.services.rag_service import RAGService
 
@@ -22,15 +23,20 @@ def get_rag_service() -> RAGService:
     status_code=status.HTTP_200_OK,
     responses={
         400: {"model": ErrorResponse, "description": "Bad Request — empty query"},
+        401: {"model": ErrorResponse, "description": "Unauthorized — missing or invalid access token"},
+        403: {"model": ErrorResponse, "description": "Forbidden — user dev=true request"},
         503: {"model": ErrorResponse, "description": "Service Unavailable — dependency failure"},
         500: {"model": ErrorResponse, "description": "Internal Server Error"}
     }
 )
 async def query_rag(
     request: RAGRequest,
+    principal: Principal = Depends(get_current_principal),
     rag_service: RAGService = Depends(get_rag_service)
 ) -> RAGResponse:
     """Executes medical RAG pipeline query and returns grounded answer with citations and confidence metrics."""
+    enforce_rag_dev_policy(request.dev, principal)
+
     if not request.query or not request.query.strip():
         logger.warning("Rejected empty RAG query request")
         raise HTTPException(
@@ -74,15 +80,20 @@ async def query_rag(
     status_code=status.HTTP_200_OK,
     responses={
         400: {"model": ErrorResponse, "description": "Bad Request — empty query"},
+        401: {"model": ErrorResponse, "description": "Unauthorized — missing or invalid access token"},
+        403: {"model": ErrorResponse, "description": "Forbidden — user dev=true request"},
         503: {"model": ErrorResponse, "description": "Service Unavailable — dependency failure"},
         500: {"model": ErrorResponse, "description": "Internal Server Error"}
     }
 )
 async def query_rag_stream(
     request: RAGRequest,
+    principal: Principal = Depends(get_current_principal),
     rag_service: RAGService = Depends(get_rag_service)
 ) -> StreamingResponse:
     """Streams medical RAG pipeline answer token-by-token using Server-Sent Events (SSE)."""
+    enforce_rag_dev_policy(request.dev, principal)
+
     if not request.query or not request.query.strip():
         logger.warning("Rejected empty streaming RAG query request")
         raise HTTPException(
@@ -99,4 +110,5 @@ async def query_rag_stream(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Internal server error"
         ) from exc
+
 

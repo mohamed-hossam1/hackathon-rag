@@ -13,6 +13,7 @@ from src.api.schemas import (
     ErrorResponse,
     UploadResponse,
 )
+from src.auth import Principal, get_current_principal, require_admin
 from src.config import get_config
 from src.models.document import Document, DocumentStatus, FileType
 from src.queue.task_queue import TaskQueue
@@ -108,12 +109,14 @@ def save_uploaded_file(file_content: bytes, filename: str, document_id: str) -> 
     status_code=status.HTTP_202_ACCEPTED,
     responses={
         400: {"model": ErrorResponse, "description": "Bad Request — unsupported file type or empty file"},
+        401: {"model": ErrorResponse, "description": "Unauthorized — missing or invalid access token"},
         413: {"model": ErrorResponse, "description": "Payload Too Large — file size exceeds limit"},
         500: {"model": ErrorResponse, "description": "Internal Server Error — storage failure"}
     }
 )
 async def upload_document(
     file: UploadFile = File(...),
+    principal: Principal = Depends(get_current_principal),
     doc_store: DocumentStore = Depends(get_document_store),
     ingestion_service: DocumentIngestionService = Depends(get_ingestion_service),
     task_queue: TaskQueue = Depends(get_task_queue)
@@ -192,7 +195,7 @@ async def upload_document(
     ingest_target = local_ingest_path if os.path.exists(local_ingest_path) else saved_path
     task_queue.enqueue_nowait(lambda: ingestion_service.ingest(document_id, ingest_target))
 
-    logger.info(f"Successfully enqueued processing task for document_id='{document_id}' ({filename})")
+    logger.info(f"Successfully enqueued processing task for document_id='{document_id}' ({filename}) by user_id='{principal.user_id}'")
 
     return UploadResponse(
         document_id=document_id,
@@ -208,11 +211,13 @@ async def upload_document(
     response_model=DocumentStatusResponse,
     status_code=status.HTTP_200_OK,
     responses={
+        401: {"model": ErrorResponse, "description": "Unauthorized — missing or invalid access token"},
         404: {"model": ErrorResponse, "description": "Not Found — document ID does not exist"}
     }
 )
 async def get_document_status(
     document_id: str,
+    principal: Principal = Depends(get_current_principal),
     doc_store: DocumentStore = Depends(get_document_store)
 ) -> DocumentStatusResponse:
     """Retrieves processing status and details for a specific uploaded document."""
@@ -236,9 +241,14 @@ async def get_document_status(
 @router.get(
     "/documents",
     response_model=DocumentListResponse,
-    status_code=status.HTTP_200_OK
+    status_code=status.HTTP_200_OK,
+    responses={
+        401: {"model": ErrorResponse, "description": "Unauthorized — missing or invalid access token"},
+        403: {"model": ErrorResponse, "description": "Forbidden — Admin privileges required"}
+    }
 )
 async def list_documents(
+    admin: Principal = Depends(require_admin),
     doc_store: DocumentStore = Depends(get_document_store)
 ) -> DocumentListResponse:
     """Lists all uploaded documents and their processing status."""
@@ -256,3 +266,4 @@ async def list_documents(
     ]
 
     return DocumentListResponse(documents=items)
+

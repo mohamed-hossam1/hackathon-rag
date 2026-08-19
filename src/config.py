@@ -23,11 +23,33 @@ class AppConfig(BaseSettings):
     AWS_ACCESS_KEY_ID: str = ""
     AWS_SECRET_ACCESS_KEY: str = ""
 
-    # Supabase Database
+    # Supabase Database & Auth
     SUPABASE_URL: str = ""
     SUPABASE_KEY: str = ""
     SUPABASE_SECRET_KEY: str = ""
     SUPABASE_PUBLISHABLE_KEY: str = ""
+
+    # Auth & Security Configuration
+    SUPABASE_JWT_AUDIENCE: str = "authenticated"
+    SUPABASE_JWT_ALGORITHMS: list[str] = ["ES256"]
+    JWT_CLOCK_SKEW_SECONDS: int = 10
+    CORS_ALLOWED_ORIGINS: list[str] = [
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+    ]
+
+    @property
+    def SUPABASE_JWKS_URL(self) -> str:
+        """Derived URL for fetching Supabase public JWKS keys."""
+        base = self.SUPABASE_URL.rstrip("/")
+        return f"{base}/auth/v1/.well-known/jwks.json"
+
+    @property
+    def SUPABASE_JWT_ISSUER(self) -> str:
+        """Derived exact expected issuer claim for Supabase tokens."""
+        base = self.SUPABASE_URL.rstrip("/")
+        return f"{base}/auth/v1"
+
 
     # Models
     EMBEDDING_MODEL: str = "BAAI/bge-small-en-v1.5"

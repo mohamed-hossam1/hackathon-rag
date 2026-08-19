@@ -2,6 +2,7 @@ import logging
 from fastapi import APIRouter, Depends, HTTPException, status
 
 from src.api.schemas import ErrorResponse, EvaluateRequest, EvaluateResponse
+from src.auth import Principal, require_admin
 from src.evaluation.rag_evaluator import RAGEvaluator
 
 logger = logging.getLogger("medical_rag.api.eval")
@@ -19,14 +20,18 @@ def get_rag_evaluator() -> RAGEvaluator:
     status_code=status.HTTP_200_OK,
     responses={
         400: {"model": ErrorResponse, "description": "Bad Request — empty query list"},
+        401: {"model": ErrorResponse, "description": "Unauthorized — missing or invalid access token"},
+        403: {"model": ErrorResponse, "description": "Forbidden — Admin privileges required"},
         503: {"model": ErrorResponse, "description": "Service Unavailable — dependency failure"},
         500: {"model": ErrorResponse, "description": "Internal Server Error"}
     }
 )
 async def evaluate_rag(
     request: EvaluateRequest,
+    admin: Principal = Depends(require_admin),
     evaluator: RAGEvaluator = Depends(get_rag_evaluator)
 ) -> EvaluateResponse:
+
     """Evaluates retrieval quality across semantic, recursive, BM25, and reranker stages using LLM-as-a-Judge."""
     if not request.queries:
         logger.warning("Rejected empty evaluation query list")
