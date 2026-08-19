@@ -107,6 +107,11 @@ class RAGService:
         rec_results = self.recursive_retriever.retrieve(query_text, top_k=self.top_k_retrieval)
         bm25_results = self.bm25_retriever.retrieve(query_text, top_k=self.top_k_retrieval)
 
+        # Step 1.5: Normalize scores per retriever to [0, 1] before merging
+        sem_results = self._normalize_scores(sem_results)
+        rec_results = self._normalize_scores(rec_results)
+        bm25_results = self._normalize_scores(bm25_results)
+
         # Step 2: Union & Deduplication
         all_candidates = sem_results + rec_results + bm25_results
         dedup_candidates = self.deduplicator.deduplicate(all_candidates)
@@ -235,6 +240,11 @@ class RAGService:
         rec_results = self.recursive_retriever.retrieve(query_text, top_k=self.top_k_retrieval)
         bm25_results = self.bm25_retriever.retrieve(query_text, top_k=self.top_k_retrieval)
 
+        # Step 1.5: Normalize scores per retriever to [0, 1] before merging
+        sem_results = self._normalize_scores(sem_results)
+        rec_results = self._normalize_scores(rec_results)
+        bm25_results = self._normalize_scores(bm25_results)
+
         # Step 2: Union & Deduplication
         all_candidates = sem_results + rec_results + bm25_results
         dedup_candidates = self.deduplicator.deduplicate(all_candidates)
@@ -356,6 +366,32 @@ class RAGService:
 
         yield f"event: final\ndata: {final_response.model_dump_json()}\n\n"
 
+
+    @staticmethod
+    def _normalize_scores(results: List[RetrievalResult]) -> List[RetrievalResult]:
+        """Min-max normalizes retrieval scores to [0, 1] range within a single retriever's output.
+
+        This ensures scores from different retrievers (semantic cosine ~0-1, BM25 ~0-20+)
+        are on a comparable scale before union and deduplication.
+        """
+        if not results:
+            return results
+
+        scores = [r.score for r in results]
+        min_s = min(scores)
+        max_s = max(scores)
+        score_range = max_s - min_s
+
+        if score_range == 0:
+            # All scores identical — assign 1.0 to all
+            for r in results:
+                r.score = 1.0
+            return results
+
+        for r in results:
+            r.score = round((r.score - min_s) / score_range, 6)
+
+        return results
 
     def _parse_citations(self, answer_text: str, chunks_map: Dict[str, Chunk]) -> List[Citation]:
         """Extracts structured Citation objects from inline citation tags in the answer."""

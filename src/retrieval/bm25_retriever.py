@@ -80,8 +80,8 @@ class BM25Retriever(Retriever):
             # Require at least one matching keyword
             if matching_terms:
                 raw_score = float(scores[idx])
-                # Ensure positive score for true keyword matches
-                score = max(0.001, raw_score) + 0.1 * len(matching_terms)
+                # Use raw BM25 score with a small positive floor for true keyword matches
+                score = max(0.001, raw_score)
                 results.append(
                     RetrievalResult(
                         chunk=self.chunks[idx],

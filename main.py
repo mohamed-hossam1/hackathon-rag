@@ -5,6 +5,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+from mangum import Mangum
 
 from src.api.dev_router import router as dev_router
 from src.api.eval_router import router as eval_router
@@ -165,3 +166,6 @@ app.include_router(dev_router)
 frontend_dir = os.path.join(os.path.dirname(__file__), "frontend")
 if os.path.exists(frontend_dir):
     app.mount("/static", StaticFiles(directory=frontend_dir), name="static")
+
+# AWS Lambda handler using Mangum adapter
+handler = Mangum(app)

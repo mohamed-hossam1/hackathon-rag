@@ -16,8 +16,10 @@ class AppConfig(BaseSettings):
     LLM_BASE_URL: str = "https://api.groq.com/openai/v1"
     QDRANT_URL: str = "http://localhost:6333"
     QDRANT_API_KEY: str = ""
-    S3_BUCKET: str = "medical-rag-documents"
-    AWS_REGION: str = "us-east-1"
+    QDRANT_TIMEOUT: int = 60
+    QDRANT_BATCH_SIZE: int = 100
+    S3_BUCKET: str = "medical-rag-docs-mohamed-2026"
+    AWS_REGION: str = "eu-central-1"
     AWS_ACCESS_KEY_ID: str = ""
     AWS_SECRET_ACCESS_KEY: str = ""
 

@@ -199,7 +199,7 @@ class CitationValidator:
 
     @staticmethod
     def compute_evidence_score(validations: List[CitationValidationResult]) -> float:
-        """Computes a risk-weighted evidence score (0.0 to 1.0) incorporating claim risk levels and contradiction penalties."""
+        """Computes a risk-weighted evidence score (0.0 to 1.0) incorporating claim risk levels, contradiction penalties, and citation coverage."""
         if not validations:
             return 0.0
 
@@ -221,6 +221,18 @@ class CitationValidator:
 
         ratio = earned_score / total_weight
         bounded_score = max(0.0, min(1.0, ratio))
+
+        # Citation coverage factor: penalize sparse citation counts
+        # 1 citation → max 0.85, 2 citations → max 0.92, 3+ → full score
+        citation_count = len(validations)
+        if citation_count == 1:
+            coverage_cap = 0.85
+        elif citation_count == 2:
+            coverage_cap = 0.92
+        else:
+            coverage_cap = 1.0
+
+        bounded_score = min(bounded_score, coverage_cap)
         return round(bounded_score, 2)
 
     @staticmethod

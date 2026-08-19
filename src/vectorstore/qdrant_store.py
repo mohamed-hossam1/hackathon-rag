@@ -21,18 +21,23 @@ class QdrantVectorStore(VectorStore):
         url: Optional[str] = None,
         api_key: Optional[str] = None,
         collection_name: Optional[str] = None,
-        vector_size: int = 384
+        vector_size: int = 384,
+        timeout: Optional[int] = None,
+        batch_size: Optional[int] = None,
     ):
         config = get_config()
         self.url = url or config.QDRANT_URL
         self.api_key = api_key or config.QDRANT_API_KEY
         self.collection_name = collection_name or config.COLLECTION_NAME
         self.vector_size = vector_size
+        raw_timeout = timeout if timeout is not None else getattr(config, "QDRANT_TIMEOUT", 60)
+        self.timeout: int = int(raw_timeout)
+        self.batch_size: int = int(batch_size if batch_size is not None else getattr(config, "QDRANT_BATCH_SIZE", 100))
 
         if self.api_key and self.url:
-            self.client = QdrantClient(url=self.url, api_key=self.api_key)
+            self.client = QdrantClient(url=self.url, api_key=self.api_key, timeout=self.timeout)
         elif self.url:
-            self.client = QdrantClient(url=self.url)
+            self.client = QdrantClient(url=self.url, timeout=self.timeout)
         else:
             self.client = QdrantClient(":memory:")
 
@@ -48,19 +53,22 @@ class QdrantVectorStore(VectorStore):
                     vectors_config=qmodels.VectorParams(
                         size=self.vector_size,
                         distance=qmodels.Distance.COSINE
-                    )
+                    ),
+                    timeout=self.timeout
                 )
                 # Create payload indexes for efficient filtering
                 try:
                     self.client.create_payload_index(
                         collection_name=self.collection_name,
                         field_name="document_id",
-                        field_schema=qmodels.PayloadSchemaType.KEYWORD
+                        field_schema=qmodels.PayloadSchemaType.KEYWORD,
+                        timeout=self.timeout
                     )
                     self.client.create_payload_index(
                         collection_name=self.collection_name,
                         field_name="chunker_type",
-                        field_schema=qmodels.PayloadSchemaType.KEYWORD
+                        field_schema=qmodels.PayloadSchemaType.KEYWORD,
+                        timeout=self.timeout
                     )
                 except Exception as index_err:
                     logger.debug(f"Payload index notice: {index_err}")
@@ -69,8 +77,13 @@ class QdrantVectorStore(VectorStore):
             logger.error(f"Failed to create/check Qdrant collection '{self.collection_name}': {err}")
             return False
 
-    def upsert(self, chunks: List[Chunk], vectors: List[List[float]]) -> bool:
-        """Upserts chunks and their embedding vectors into Qdrant."""
+    def upsert(
+        self,
+        chunks: List[Chunk],
+        vectors: List[List[float]],
+        batch_size: Optional[int] = None
+    ) -> bool:
+        """Upserts chunks and their embedding vectors into Qdrant in batches."""
         if not chunks or not vectors:
             return True
 
@@ -90,12 +103,26 @@ class QdrantVectorStore(VectorStore):
                 )
             )
 
+        effective_batch_size = batch_size or self.batch_size
+        total_points = len(points)
+
         try:
-            self.client.upsert(
-                collection_name=self.collection_name,
-                points=points
+            for i in range(0, total_points, effective_batch_size):
+                batch = points[i : i + effective_batch_size]
+                self.client.upsert(
+                    collection_name=self.collection_name,
+                    points=batch,
+                    timeout=self.timeout
+                )
+                logger.debug(
+                    f"Upserted batch {i // effective_batch_size + 1}/"
+                    f"{(total_points + effective_batch_size - 1) // effective_batch_size} "
+                    f"({len(batch)} points)"
+                )
+            logger.info(
+                f"Successfully upserted {total_points} chunks into '{self.collection_name}' "
+                f"in batches of {effective_batch_size}"
             )
-            logger.info(f"Successfully upserted {len(points)} chunks into '{self.collection_name}'")
             return True
         except Exception as err:
             logger.error(f"Failed to upsert chunks into Qdrant: {err}")
