@@ -18,6 +18,14 @@ class AppConfig(BaseSettings):
     QDRANT_API_KEY: str = ""
     S3_BUCKET: str = "medical-rag-documents"
     AWS_REGION: str = "us-east-1"
+    AWS_ACCESS_KEY_ID: str = ""
+    AWS_SECRET_ACCESS_KEY: str = ""
+
+    # Supabase Database
+    SUPABASE_URL: str = ""
+    SUPABASE_KEY: str = ""
+    SUPABASE_SECRET_KEY: str = ""
+    SUPABASE_PUBLISHABLE_KEY: str = ""
 
     # Models
     EMBEDDING_MODEL: str = "BAAI/bge-small-en-v1.5"
@@ -26,7 +34,7 @@ class AppConfig(BaseSettings):
 
     # Chunking & Document Processing
     MAX_FILE_SIZE_MB: int = 50
-    SEMANTIC_CHUNK_THRESHOLD: float = 0.75
+    SEMANTIC_CHUNK_THRESHOLD: float = 0.50
     RECURSIVE_CHUNK_SIZE: int = 512
     RECURSIVE_CHUNK_OVERLAP: int = 64
 

@@ -6,6 +6,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
+from src.api.dev_router import router as dev_router
 from src.api.eval_router import router as eval_router
 from src.api.health_router import router as health_router
 from src.api.rag_router import router as rag_router, get_rag_service
@@ -156,6 +157,7 @@ app.include_router(rag_router)
 app.include_router(upload_router)
 app.include_router(health_router)
 app.include_router(eval_router)
+app.include_router(dev_router)
 
 # Mount Frontend Static Files if directory exists
 frontend_dir = os.path.join(os.path.dirname(__file__), "frontend")

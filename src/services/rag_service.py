@@ -3,6 +3,7 @@ import re
 from typing import Dict, List, Optional
 
 from src.config import get_config
+from src.db.supabase_service import SupabaseService
 from src.deduplication.chunk_deduplicator import ChunkDeduplicator
 from src.embedding.embedding_service import EmbeddingService
 from src.llm.base import LLMService
@@ -51,7 +52,8 @@ class RAGService:
         reranker: Optional[BGEReranker] = None,
         llm_service: Optional[LLMService] = None,
         citation_validator: Optional[CitationValidator] = None,
-        evidence_threshold: Optional[float] = None
+        evidence_threshold: Optional[float] = None,
+        supabase_service: Optional[SupabaseService] = None
     ):
         config = get_config()
         embedding_service = EmbeddingService()
@@ -70,6 +72,7 @@ class RAGService:
         self.citation_validator = citation_validator or CitationValidator(
             llm_service=self.llm_service
         )
+        self.supabase_service = supabase_service or SupabaseService()
         self.evidence_threshold = (
             evidence_threshold if evidence_threshold is not None else config.EVIDENCE_THRESHOLD
         )
@@ -116,6 +119,7 @@ class RAGService:
             logger.warning("No context chunks found; returning abstention response")
             return self._build_abstention_response(
                 dev=dev,
+                query_text=query_text,
                 sem_results=sem_results,
                 rec_results=rec_results,
                 bm25_results=bm25_results,
@@ -163,6 +167,7 @@ class RAGService:
             logger.info(f"Abstaining: evidence_score={evidence_score:.2f} < threshold={self.evidence_threshold}")
             return self._build_abstention_response(
                 dev=dev,
+                query_text=query_text,
                 sem_results=sem_results,
                 rec_results=rec_results,
                 bm25_results=bm25_results,
@@ -175,6 +180,15 @@ class RAGService:
         # Clean citation tags from answer text for clean user display if desired, or preserve inline
         dev_trace_obj = None
         if dev:
+            self.supabase_service.save_dev_trace(
+                query_text=query_text,
+                abstained=False,
+                evidence_score=evidence_score,
+                semantic_chunks=sem_results,
+                recursive_chunks=rec_results,
+                bm25_chunks=bm25_results,
+                reranker_chunks=reranker_results
+            )
             dev_trace_obj = DevTrace(
                 semantic_results=sem_results,
                 recursive_results=rec_results,
@@ -247,6 +261,7 @@ class RAGService:
     def _build_abstention_response(
         self,
         dev: bool,
+        query_text: str,
         sem_results: List[RetrievalResult],
         rec_results: List[RetrievalResult],
         bm25_results: List[RetrievalResult],
@@ -258,6 +273,15 @@ class RAGService:
         """Helper to construct an abstention RAGResponse."""
         dev_trace_obj = None
         if dev:
+            self.supabase_service.save_dev_trace(
+                query_text=query_text,
+                abstained=True,
+                evidence_score=0.0,
+                semantic_chunks=sem_results,
+                recursive_chunks=rec_results,
+                bm25_chunks=bm25_results,
+                reranker_chunks=reranker_results
+            )
             dev_trace_obj = DevTrace(
                 semantic_results=sem_results,
                 recursive_results=rec_results,
