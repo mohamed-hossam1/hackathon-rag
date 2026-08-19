@@ -1,6 +1,8 @@
 import logging
+import os
 from pathlib import Path
-from typing import Dict, List, Optional, Union
+from typing import Dict, List, Mapping, Optional, Union
+
 
 from src.chunking.recursive_chunker import RecursiveChunker
 from src.chunking.semantic_chunker import SemanticChunker
@@ -34,7 +36,7 @@ class DocumentIngestionService:
         recursive_chunker: Optional[RecursiveChunker] = None,
         document_cleaner: Optional[DocumentCleaner] = None,
         ocr_processor: Optional[OCRProcessor] = None,
-        parsers: Optional[Dict[str, Parser]] = None,
+        parsers: Optional[Mapping[str, Parser]] = None,
     ):
         self.document_store = document_store or DocumentStore()
         self.embedding_service = embedding_service or EmbeddingService()
@@ -45,7 +47,7 @@ class DocumentIngestionService:
         self.document_cleaner = document_cleaner or DocumentCleaner()
         self.ocr_processor = ocr_processor or OCRProcessor()
 
-        self.parsers = parsers or {
+        self.parsers: Dict[str, Parser] = dict(parsers) if parsers is not None else {
             FileType.PDF.value: PDFParser(),
             FileType.DOCX.value: DOCXParser(),
             FileType.DOC.value: DOCParser(),
@@ -155,3 +157,11 @@ class DocumentIngestionService:
                 error_message=str(err)
             )
             return False
+        finally:
+            if os.path.exists(file_path):
+                try:
+                    os.remove(file_path)
+                    logger.info(f"Auto-cleaned temporary local file '{file_path}' after ingestion")
+                except Exception as cleanup_err:
+                    logger.warning(f"Failed to remove temporary local file '{file_path}': {cleanup_err}")
+

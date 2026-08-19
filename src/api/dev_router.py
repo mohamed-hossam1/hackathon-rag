@@ -5,7 +5,7 @@ from pydantic import BaseModel, Field
 
 from src.db.supabase_service import SupabaseService
 from src.evaluation.llm_judge import LLMJudge
-from src.models.chunk import Chunk
+from src.models.chunk import Chunk, ChunkerType
 
 logger = logging.getLogger("medical_rag.api.dev_router")
 
@@ -171,10 +171,15 @@ async def evaluate_query_retrieval(query_id: str = Path(..., description="UUID o
         chunks = [
             Chunk(
                 chunk_id=item.get("chunk_id", f"{method}_{idx}"),
-                text=item.get("chunk_text", ""),
+                text=item.get("chunk_text") or item.get("text") or "N/A",
+                document_id=item.get("document_id", "doc_unknown"),
                 filename=item.get("filename", "doc.pdf"),
                 page_start=item.get("page_start", 1),
-                page_end=item.get("page_start", 1)
+                page_end=item.get("page_start", 1),
+                chunk_index=item.get("chunk_index", idx),
+                chunker_type=item.get("chunker_type", ChunkerType.SEMANTIC if method == "semantic" else ChunkerType.RECURSIVE),
+                start_char=item.get("start_char", 0),
+                end_char=item.get("end_char", max(1, len(item.get("chunk_text") or item.get("text") or "N/A"))),
             )
             for idx, item in enumerate(items, 1)
         ]

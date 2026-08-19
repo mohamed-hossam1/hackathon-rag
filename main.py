@@ -27,6 +27,7 @@ from src.evaluation.llm_judge import LLMJudge
 from src.evaluation.rag_evaluator import RAGEvaluator
 from src.llm.llm_service import OpenAILikeLLMService
 from src.models.document import FileType
+from src.parsers.base import Parser
 from src.parsers.doc_parser import DOCParser
 from src.parsers.docx_parser import DOCXParser
 from src.parsers.markdown_parser import MarkdownParser
@@ -65,7 +66,7 @@ async def lifespan(app: FastAPI):
     document_store.load_from_supabase()
 
     # Parsers
-    parsers = {
+    parsers: dict[str, Parser] = {
         FileType.PDF.value: PDFParser(),
         FileType.DOCX.value: DOCXParser(),
         FileType.DOC.value: DOCParser(),

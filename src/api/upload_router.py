@@ -51,7 +51,7 @@ def get_task_queue() -> TaskQueue:
 
 
 def save_uploaded_file(file_content: bytes, filename: str, document_id: str) -> str:
-    """Stores uploaded file to local filesystem fallback (or S3 if configured)."""
+    """Stores uploaded file to local filesystem and uploads to S3 if configured."""
     config = get_config()
     storage_dir = os.path.join(os.getcwd(), "uploads")
     os.makedirs(storage_dir, exist_ok=True)
@@ -59,7 +59,11 @@ def save_uploaded_file(file_content: bytes, filename: str, document_id: str) -> 
     safe_filename = f"{document_id}_{Path(filename).name}"
     local_path = os.path.join(storage_dir, safe_filename)
 
-    # Attempt S3 upload if S3 credentials/bucket are active
+    # Always save local copy for PyMuPDF/OCR parsing pipeline
+    with open(local_path, "wb") as f:
+        f.write(file_content)
+
+    s3_path: Optional[str] = None
     s3_bucket = config.S3_BUCKET
     if s3_bucket and config.AWS_ACCESS_KEY_ID:
         try:
@@ -70,18 +74,32 @@ def save_uploaded_file(file_content: bytes, filename: str, document_id: str) -> 
                 aws_access_key_id=config.AWS_ACCESS_KEY_ID,
                 aws_secret_access_key=config.AWS_SECRET_ACCESS_KEY or None,
             )
+
+            # Auto-create bucket if missing
+            try:
+                s3_client.head_bucket(Bucket=s3_bucket)
+            except Exception:
+                logger.info(f"S3 Bucket '{s3_bucket}' not found. Attempting auto-creation...")
+                if config.AWS_REGION == "us-east-1":
+                    s3_client.create_bucket(Bucket=s3_bucket)
+                else:
+                    s3_client.create_bucket(
+                        Bucket=s3_bucket,
+                        CreateBucketConfiguration={"LocationConstraint": config.AWS_REGION}
+                    )
+                logger.info(f"Successfully created S3 bucket '{s3_bucket}' in region '{config.AWS_REGION}'")
+
             s3_key = f"documents/{safe_filename}"
             s3_client.put_object(Bucket=s3_bucket, Key=s3_key, Body=file_content)
-            logger.info(f"Uploaded '{filename}' to S3 bucket '{s3_bucket}' with key '{s3_key}'")
+            s3_path = f"s3://{s3_bucket}/{s3_key}"
+            logger.info(f"Uploaded '{filename}' to S3 bucket '{s3_bucket}' with key '{s3_key}' ({s3_path})")
         except Exception as s3_err:
             logger.warning(f"S3 upload failed ({s3_err}), falling back to local storage path")
 
-    # Save to local filesystem as target file
-    with open(local_path, "wb") as f:
-        f.write(file_content)
+    target_path = s3_path or local_path
+    logger.info(f"Saved uploaded file target storage_path='{target_path}'")
+    return target_path
 
-    logger.info(f"Saved uploaded file to '{local_path}'")
-    return local_path
 
 
 @router.post(
@@ -168,8 +186,12 @@ async def upload_document(
     )
     doc_store.add_document(doc)
 
-    # Enqueue background processing task
-    task_queue.enqueue_nowait(lambda: ingestion_service.ingest(document_id, saved_path))
+    # Enqueue background processing task using local path for PyMuPDF/OCR parsing
+    safe_filename = f"{document_id}_{Path(filename).name}"
+    local_ingest_path = os.path.join(os.getcwd(), "uploads", safe_filename)
+    ingest_target = local_ingest_path if os.path.exists(local_ingest_path) else saved_path
+    task_queue.enqueue_nowait(lambda: ingestion_service.ingest(document_id, ingest_target))
+
     logger.info(f"Successfully enqueued processing task for document_id='{document_id}' ({filename})")
 
     return UploadResponse(
