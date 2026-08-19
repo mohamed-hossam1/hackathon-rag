@@ -23,10 +23,11 @@ jobs:
           key: ${{ secrets.EC2_SSH_KEY }}
           script: |
             cd ~/rag-app
-            git pull || true
+            git fetch origin main
+            git reset --hard origin/main
             source .venv/bin/activate
             pip install --no-cache-dir -r requirements.txt
-            pkill -f uvicorn || true
-            nohup uvicorn main:app --host 0.0.0.0 --port 8000 > app.log 2>&1 &
+            fuser -k 8000/tcp || pkill -f uvicorn || true
+            nohup .venv/bin/uvicorn main:app --host 0.0.0.0 --port 8000 > app.log 2>&1 &
             sleep 2
-            ps aux | grep uvicorn
+            curl -s http://localhost:8000/health || true
