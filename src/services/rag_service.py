@@ -403,7 +403,7 @@ class RAGService:
         )
 
         lines = answer_text.split("\n")
-        for line in lines:
+        for line_idx, line in enumerate(lines):
             line_str = line.strip()
             if not line_str:
                 continue
@@ -421,8 +421,18 @@ class RAGService:
                 claim_text = line_str[: match.start()].strip()
                 # Clean preceding citation tags from claim text if multiple citations on line
                 claim_text = re.sub(r"[\[【]Doc:.*?[\]】]", "", claim_text).strip()
+
+                # If citation tag is at start of line or on its own line, look back at previous non-citation line
                 if not claim_text:
-                    claim_text = line_str
+                    prev_lines = [
+                        l.strip() for l in lines[:line_idx]
+                        if l.strip() and not citation_pattern.fullmatch(l.strip())
+                    ]
+                    if prev_lines:
+                        claim_text = prev_lines[-1]
+                        claim_text = re.sub(r"[\[【]Doc:.*?[\]】]", "", claim_text).strip()
+                    else:
+                        claim_text = line_str
 
                 chunk = chunks_map.get(chunk_id)
                 document_id = chunk.document_id if chunk else "unknown"
