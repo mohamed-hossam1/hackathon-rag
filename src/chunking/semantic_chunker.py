@@ -17,11 +17,15 @@ class SemanticChunker(Chunker):
     def __init__(
         self,
         embedding_service: Optional[EmbeddingService] = None,
-        threshold: Optional[float] = None
+        threshold: Optional[float] = None,
+        max_chars: Optional[int] = 1500,
+        min_chars: Optional[int] = 0
     ):
         config = get_config()
         self.embedding_service = embedding_service or EmbeddingService()
         self.threshold = threshold if threshold is not None else config.SEMANTIC_CHUNK_THRESHOLD
+        self.max_chars = max_chars if max_chars is not None else 1500
+        self.min_chars = min_chars if min_chars is not None else 0
 
     def _extract_sentences_with_spans(self, text: str) -> List[Tuple[str, int, int]]:
         """Extracts sentences from text along with their (start_char, end_char) offsets in text."""
@@ -84,11 +88,19 @@ class SemanticChunker(Chunker):
 
             for i in range(len(sentences) - 1):
                 sim = self._cosine_similarity(embeddings[i], embeddings[i + 1])
-                if sim < self.threshold:
+                next_sentence = sentences[i + 1]
+
+                current_len = sum(len(s[0]) for s in current_group)
+                next_len = len(next_sentence[0])
+
+                exceeds_max = (current_len + next_len > self.max_chars)
+                semantic_break = (sim < self.threshold) and (current_len >= self.min_chars)
+
+                if exceeds_max or semantic_break:
                     sentence_groups.append(current_group)
-                    current_group = [sentences[i + 1]]
+                    current_group = [next_sentence]
                 else:
-                    current_group.append(sentences[i + 1])
+                    current_group.append(next_sentence)
             if current_group:
                 sentence_groups.append(current_group)
 

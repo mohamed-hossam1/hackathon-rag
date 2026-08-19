@@ -24,7 +24,8 @@ class RecursiveChunker(Chunker):
         self.chunk_overlap = chunk_overlap if chunk_overlap is not None else config.RECURSIVE_CHUNK_OVERLAP
         self.splitter = RecursiveCharacterTextSplitter(
             chunk_size=self.chunk_size,
-            chunk_overlap=self.chunk_overlap
+            chunk_overlap=self.chunk_overlap,
+            separators=["\n\n", "\n", ". ", "؟ ", "! ", "، ", " ", ""]
         )
 
     def chunk(
