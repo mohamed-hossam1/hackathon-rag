@@ -12,7 +12,8 @@ class AppConfig(BaseSettings):
     )
 
     # API Keys & Services
-    GROQ_API_KEY: str = ""
+    LLM_API_KEY: str = ""
+    LLM_BASE_URL: str = "https://api.groq.com/openai/v1"
     QDRANT_URL: str = "http://localhost:6333"
     QDRANT_API_KEY: str = ""
     S3_BUCKET: str = "medical-rag-documents"

@@ -1,3 +1,4 @@
+from typing import Optional
 from pydantic import BaseModel, Field
 
 
@@ -16,5 +17,7 @@ class CitationValidationResult(BaseModel):
     claim: str = Field(..., description="The claim being validated")
     chunk_id: str = Field(..., description="ID of the cited chunk")
     chunk_text: str = Field(..., description="Text content of the cited chunk for auditability")
-    supported: bool = Field(..., description="Whether the LLM validator determined the chunk supports the claim")
+    supported: bool = Field(..., description="Whether the claim is strictly supported by evidence")
     reason: str = Field(..., description="Explanation of the validation judgment")
+    status: str = Field(default="supports", description="Validation classification: 'supports', 'not_supported', or 'contradicts'")
+    risk_level: str = Field(default="standard", description="Claim safety risk level: 'high' or 'standard'")

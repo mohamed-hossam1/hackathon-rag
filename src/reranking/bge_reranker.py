@@ -1,5 +1,5 @@
 import logging
-from typing import List, Optional, Tuple
+from typing import Any, List, Optional
 from sentence_transformers import CrossEncoder
 
 from src.config import get_config
@@ -39,11 +39,11 @@ class BGEReranker:
 
         limit = top_k if top_k is not None else self.top_k_default
 
-        # Construct query-chunk text pairs for CrossEncoder scoring (tuples)
-        pairs: List[Tuple[str, str]] = [(query, candidate.chunk.text) for candidate in candidates]
+        # Construct query-chunk text pairs for CrossEncoder scoring
+        pairs: List[Any] = [[query, candidate.chunk.text] for candidate in candidates]
         logger.info(f"Reranking {len(pairs)} query-chunk pairs with model {self.model_name}")
 
-        scores = self.model.predict(pairs)
+        scores = self.model.predict(pairs)  # type: ignore
 
         rerank_results: List[RerankResult] = []
         for candidate, score in zip(candidates, scores):
