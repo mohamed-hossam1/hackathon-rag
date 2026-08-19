@@ -27,9 +27,5 @@ jobs:
             git reset --hard origin/main
             source .venv/bin/activate
             pip install --no-cache-dir -r requirements.txt
-            fuser -k 8000/tcp || pkill -f uvicorn || true
-            sleep 1
-            nohup .venv/bin/uvicorn main:app --host 0.0.0.0 --port 8000 > app.log 2>&1 &
-            disown
-            sleep 3
-            curl -s http://localhost:8000/health || true
+            sudo systemctl restart rag
+            sudo systemctl is-active --quiet rag && echo "Medical RAG service restarted successfully!"
