@@ -27,3 +27,5 @@ prompt.md
 specs
 .specify
 .agents
+.vscode/
+pyrightconfig.json

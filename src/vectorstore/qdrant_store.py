@@ -142,7 +142,7 @@ class QdrantVectorStore(VectorStore):
 
             results: List[RetrievalResult] = []
             for hit in hits:
-                payload = hit.payload
+                payload = hit.payload or {}
                 chunk = Chunk(**payload)
                 method_str = payload.get("chunker_type", "semantic")
                 retrieval_method = RetrievalMethod(method_str)
