@@ -243,13 +243,13 @@ class CitationValidator:
         ratio = earned_score / total_weight
         bounded_score = max(0.0, min(1.0, ratio))
 
-        # Citation coverage factor: penalize sparse citation counts
-        # 1 citation → max 0.85, 2 citations → max 0.92, 3+ → full score
+        # Citation coverage factor: generous cap for verified citations
+        # 1 citation → max 0.95, 2 citations → max 0.98, 3+ → full score (1.00)
         citation_count = len(validations)
         if citation_count == 1:
-            coverage_cap = 0.85
+            coverage_cap = 0.95
         elif citation_count == 2:
-            coverage_cap = 0.92
+            coverage_cap = 0.98
         else:
             coverage_cap = 1.0
 

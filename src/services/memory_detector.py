@@ -44,6 +44,14 @@ class PersonalMemoryDetector:
         query_lower = query_text.lower()
         has_keyword = any(kw in query_lower for kw in personal_keywords)
 
+        # Exclude hypothetical scenarios, third-person questions, or general case studies
+        hypothetical_keywords = [
+            "imagine", "suppose", "scenario", "a patient", "this patient", "for a patient", "if a patient", "case study",
+            "افترض", "تخيل", "سيناريو", "مريض", "للمريض", "حالة مرضية"
+        ]
+        if any(hk in query_lower for hk in hypothetical_keywords):
+            return False, None, None
+
         if not has_keyword:
             return False, None, None
 

@@ -23,6 +23,7 @@ from src.reranking.bge_reranker import BGEReranker
 from src.retrieval.bm25_retriever import BM25Retriever
 from src.retrieval.recursive_retriever import RecursiveRetriever
 from src.retrieval.semantic_retriever import SemanticRetriever
+from src.services.memory_detector import PersonalMemoryDetector
 from src.validation.citation_validator import CitationValidator
 from src.vectorstore.qdrant_store import QdrantVectorStore
 
@@ -35,7 +36,7 @@ RAG_SYSTEM_PROMPT = """You are an expert clinical AI assistant answering medical
 STRICT GROUNDING RULES:
 1. Answer the question using ONLY information directly stated in the provided Context Chunks.
 2. Do NOT use outside medical knowledge, assumptions, or extrapolations.
-3. Every factual claim or statement MUST end with an inline citation tag using the exact format:
+3. Every factual claim or statement MUST end with an inline citation tag placed IMMEDIATELY after the specific sentence it supports using the exact format:
    [Doc: <filename>, Page: <page_number>, ChunkID: <chunk_id>]
 4. If the provided context does NOT contain sufficient evidence to answer the question, state EXACTLY:
    "I couldn't find sufficient evidence in the uploaded documents to answer this question."
@@ -80,7 +81,8 @@ class RAGService:
         )
         self.top_k_retrieval = config.RETRIEVAL_TOP_K
         self.top_k_rerank = config.RERANKER_TOP_K
-        self._executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="rag_parallel")
+        self._executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="rag_parallel")        
+        self.memory_detector = PersonalMemoryDetector(llm_service=self.llm_service)
 
     def _parallel_retrieve(
         self, query_text: str
@@ -104,7 +106,7 @@ class RAGService:
             self._executor.submit(self.supabase_service.save_dev_trace, **kwargs)
 
     def _detect_personal_info(self, query_text: str) -> Tuple[bool, Optional[str], Optional[str]]:
-        """Detects if English user query contains personal medical history, condition, allergies, or medications.
+        """Detects if user query contains personal medical history, condition, allergies, or medications.
 
         Returns:
             Tuple of (has_personal_info, extracted_personal_info, memory_prompt)
@@ -113,24 +115,7 @@ class RAGService:
         if not text:
             return False, None, None
 
-        # Regex patterns for personal medical indicators in English
-        pattern = r"\b(i\s+have|i\s+am|i'm|my|i\s+take|i\s+was\s+diagnosed|i\s+suffer\s+from|allergic\s+to|diagnosed\s+with|taking|history\s+of)\b"
-        matches_pattern = bool(re.search(pattern, text, re.IGNORECASE))
-
-        medical_keywords = [
-            "diabetes", "hypertension", "pressure", "asthma", "allergy", "allergic", "metformin",
-            "aspirin", "insulin", "penicillin", "pregnant", "cardiac", "kidney", "liver", "heart",
-            "cholesterol", "stroke", "cancer", "seizure", "migraine", "arthritis", "thyroid"
-        ]
-
-        matches_keyword = any(kw in text.lower() for kw in medical_keywords)
-
-        if matches_pattern and matches_keyword:
-            extracted = text.strip()
-            prompt = f"Would you like to save this medical detail ('{extracted}') for your future chat sessions?"
-            return True, extracted, prompt
-
-        return False, None, None
+        return self.memory_detector.detect(query_text)
 
     def query(
         self,
@@ -179,13 +164,8 @@ class RAGService:
         # Step 1: Tri-Hybrid Retrieval (Parallelized via ThreadPoolExecutor)
         sem_results, rec_results, bm25_results = self._parallel_retrieve(query_text)
 
-        # Step 1.5: Normalize scores per retriever to [0, 1] before merging
-        sem_results = self._normalize_scores(sem_results)
-        rec_results = self._normalize_scores(rec_results)
-        bm25_results = self._normalize_scores(bm25_results)
-
-        # Step 2: Union & Deduplication
-        all_candidates = sem_results + rec_results + bm25_results
+        # Step 2: Combine candidates using Reciprocal Rank Fusion (RRF) & Deduplicate
+        all_candidates = self._combine_candidates_with_rrf(sem_results, rec_results, bm25_results)
         dedup_candidates = self.deduplicator.deduplicate(all_candidates)
 
         # Step 3: Reranking
@@ -338,13 +318,8 @@ class RAGService:
         # Step 1: Tri-Hybrid Retrieval (Parallelized via ThreadPoolExecutor)
         sem_results, rec_results, bm25_results = self._parallel_retrieve(query_text)
 
-        # Step 1.5: Normalize scores per retriever to [0, 1] before merging
-        sem_results = self._normalize_scores(sem_results)
-        rec_results = self._normalize_scores(rec_results)
-        bm25_results = self._normalize_scores(bm25_results)
-
-        # Step 2: Union & Deduplication
-        all_candidates = sem_results + rec_results + bm25_results
+        # Step 2: Combine candidates using Reciprocal Rank Fusion (RRF) & Deduplicate
+        all_candidates = self._combine_candidates_with_rrf(sem_results, rec_results, bm25_results)
         dedup_candidates = self.deduplicator.deduplicate(all_candidates)
 
         # Step 3: Reranking
@@ -479,38 +454,59 @@ class RAGService:
 
 
     @staticmethod
-    def _normalize_scores(results: List[RetrievalResult]) -> List[RetrievalResult]:
-        """Min-max normalizes retrieval scores to [0, 1] range within a single retriever's output.
+    def _combine_candidates_with_rrf(
+        sem_results: List[RetrievalResult],
+        rec_results: List[RetrievalResult],
+        bm25_results: List[RetrievalResult],
+        k: int = 60
+    ) -> List[RetrievalResult]:
+        """Combines multi-retriever candidate lists using Reciprocal Rank Fusion (RRF).
 
-        This ensures scores from different retrievers (semantic cosine ~0-1, BM25 ~0-20+)
-        are on a comparable scale before union and deduplication.
+        RRF score = sum(1.0 / (k + rank)) across each retriever where a chunk appears.
+        Preserves original raw retrieval scores on candidate objects for accurate dev tracing.
         """
-        if not results:
-            return results
+        combined_map: Dict[str, RetrievalResult] = {}
+        rrf_scores: Dict[str, float] = {}
 
-        scores = [r.score for r in results]
-        min_s = min(scores)
-        max_s = max(scores)
-        score_range = max_s - min_s
+        for results in [sem_results, rec_results, bm25_results]:
+            for rank, res in enumerate(results, start=1):
+                cid = res.chunk.chunk_id
+                rrf_increment = 1.0 / (k + rank)
+                rrf_scores[cid] = rrf_scores.get(cid, 0.0) + rrf_increment
 
-        if score_range == 0:
-            # All scores identical — assign 1.0 to all
-            for r in results:
-                r.score = 1.0
-            return results
+                if cid not in combined_map:
+                    combined_map[cid] = RetrievalResult(
+                        chunk=res.chunk,
+                        score=res.score,
+                        retrieval_method=res.retrieval_method
+                    )
 
-        for r in results:
-            r.score = round((r.score - min_s) / score_range, 6)
+        all_candidates = list(combined_map.values())
+        for candidate in all_candidates:
+            setattr(candidate, "_fusion_score", rrf_scores.get(candidate.chunk.chunk_id, 0.0))
 
+        def _get_fusion_sort_key(c: RetrievalResult) -> float:
+            fusion_val = getattr(c, "_fusion_score", None)
+            if isinstance(fusion_val, (int, float)):
+                return float(fusion_val)
+            return float(c.score)
+
+        all_candidates.sort(key=_get_fusion_sort_key, reverse=True)
+        return all_candidates
+
+    @staticmethod
+    def _normalize_scores(results: List[RetrievalResult]) -> List[RetrievalResult]:
+        """Deprecated min-max helper kept for backward compatibility (returns unchanged scores)."""
         return results
 
     def _parse_citations(self, answer_text: str, chunks_map: Dict[str, Chunk]) -> List[Citation]:
         """Extracts structured Citation objects from inline citation tags in the answer."""
         citations: List[Citation] = []
 
-        # Matches [Doc: filename, Page: page_num, ChunkID: chunk_id] or 【Doc: filename, Page: page_num, ChunkID: chunk_id】
+        # Matches [Doc: filename, Page: page_num, ChunkID: chunk_id] or variations with quotes/brackets
         citation_pattern = re.compile(
-            r"[\[【]Doc:\s*(?P<filename>[^,]+),\s*Page:\s*(?P<page>\d+),\s*ChunkID:\s*(?P<chunk_id>[^\]】]+)[\]】]"
+            r"[\[【]Doc:\s*[\"']?(?P<filename>[^,\"'\n\]】]+)[\"']?,\s*Page:\s*(?P<page>\d+),\s*ChunkID:\s*[\"']?(?P<chunk_id>[^\"'\s\]】]+)[\"']?[\]】]",
+            re.IGNORECASE
         )
 
         lines = answer_text.split("\n")
@@ -528,26 +524,46 @@ class RAGService:
                 filename = match.group("filename").strip()
                 page_start = int(match.group("page"))
 
-                # Extract preceding sentence as claim text
-                claim_text = line_str[: match.start()].strip()
-                # Clean preceding citation tags from claim text if multiple citations on line
-                claim_text = re.sub(r"[\[【]Doc:.*?[\]】]", "", claim_text).strip()
+                # Extract preceding text on same line if present
+                raw_claim = line_str[: match.start()].strip()
+                raw_claim = re.sub(r"[\[【]Doc:.*?[\]】]", "", raw_claim).strip()
 
-                # If citation tag is at start of line or on its own line, look back at previous non-citation line
-                if not claim_text:
+                chunk = chunks_map.get(chunk_id)
+                document_id = chunk.document_id if chunk else "unknown"
+                page_end = chunk.page_end if chunk else page_start
+
+                # Look back at previous line if raw_claim is empty
+                prev_line_claim = None
+                if not raw_claim or len(raw_claim.split()) < 4:
                     prev_lines = [
                         l.strip() for l in lines[:line_idx]
                         if l.strip() and not citation_pattern.fullmatch(l.strip())
                     ]
                     if prev_lines:
-                        claim_text = prev_lines[-1]
-                        claim_text = re.sub(r"[\[【]Doc:.*?[\]】]", "", claim_text).strip()
-                    else:
-                        claim_text = line_str
+                        prev_line_claim = re.sub(r"[\[【]Doc:.*?[\]】]", "", prev_lines[-1]).strip()
 
-                chunk = chunks_map.get(chunk_id)
-                document_id = chunk.document_id if chunk else "unknown"
-                page_end = chunk.page_end if chunk else page_start
+                candidate_claim = raw_claim if (raw_claim and len(raw_claim.split()) >= 4) else prev_line_claim
+
+                # Smart Clause Matching: Split compound sentences by semicolons, periods, or conjunctions (and that, while, but) to pair chunk with its exact supported sub-claim
+                claim_text = candidate_claim or line_str
+                if chunk and chunk.text:
+                    search_text = candidate_claim if candidate_claim else answer_text
+                    clean_search = re.sub(r"[\[【]Doc:.*?[\]】]", "", search_text)
+                    raw_clauses = [
+                        s.strip() for s in re.split(r"\n+|(?:(?<!\b\d)[;;\.](?!\d\b)\s*)|(?:\s+and\s+that\s+|\s+while\s+|\s+whereas\s+|\s+but\s+)", clean_search)
+                        if len(s.strip().split()) >= 4
+                    ]
+                    if raw_clauses:
+                        chunk_words = set(re.findall(r"\w+", chunk.text.lower()))
+                        best_clause, best_overlap = None, 0.0
+                        for c_cand in raw_clauses:
+                            c_words = set(re.findall(r"\w+", c_cand.lower()))
+                            if c_words:
+                                overlap = len(chunk_words.intersection(c_words)) / len(c_words)
+                                if overlap > best_overlap:
+                                    best_overlap, best_clause = overlap, c_cand
+                        if best_clause and best_overlap >= 0.20:
+                            claim_text = best_clause
 
                 citations.append(
                     Citation(

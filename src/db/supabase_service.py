@@ -91,7 +91,7 @@ class SupabaseService:
                 for rank_idx, item in enumerate(top_10, 1):
                     # Handle both RetrievalResult/RerankResult objects and dicts/Chunk objects
                     chunk_obj = getattr(item, "chunk", item)
-                    score_val = getattr(item, "score", 0.0)
+                    score_val = getattr(item, "rerank_score", getattr(item, "score", 0.0))
 
                     chunk_id = getattr(chunk_obj, "chunk_id", str(getattr(chunk_obj, "id", "unknown")))
                     chunk_text = getattr(chunk_obj, "text", str(chunk_obj))
