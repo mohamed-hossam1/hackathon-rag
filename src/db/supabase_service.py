@@ -394,7 +394,7 @@ class SupabaseService:
                     return resp.json()
                 
                 err_data = resp.json() if resp.headers.get("content-type", "").startswith("application/json") else {}
-                msg = err_data.get("msg") or err_data.get("error_description") or err_data.get("message") or ""
+                msg = err_data.get("msg") or err_data.get("error_description") or err_data.get("message") or "Registration failed"
                 if "unregistered api key" not in msg.lower() and "invalid api key" not in msg.lower():
                     logger.error(f"Supabase signup error: {msg}")
                     raise ValueError(msg)
@@ -443,7 +443,7 @@ class SupabaseService:
                     return resp.json()
 
                 err_data = resp.json() if resp.headers.get("content-type", "").startswith("application/json") else {}
-                msg = err_data.get("error_description") or err_data.get("msg") or err_data.get("message") or ""
+                msg = err_data.get("error_description") or err_data.get("msg") or err_data.get("message") or "Invalid email or password"
                 if "unregistered api key" not in msg.lower() and "invalid api key" not in msg.lower():
                     logger.error(f"Supabase login error: {msg}")
                     raise ValueError(msg)
@@ -452,6 +452,11 @@ class SupabaseService:
                     raise exc
 
         # Dev Fallback mode when Supabase is unconfigured or key is unregistered
+        if email.lower() in _IN_MEMORY_USERS:
+            stored = _IN_MEMORY_USERS[email.lower()]
+            if stored.get("password") != password:
+                raise ValueError("Invalid email or password")
+
         logger.warning("Using local dev authentication fallback for login.")
         return {
             "access_token": token,

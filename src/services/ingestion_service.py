@@ -158,7 +158,11 @@ class DocumentIngestionService:
             )
             return False
         finally:
-            if os.path.exists(file_path):
+            is_primary_local_copy = False
+            if document and document.storage_path and os.path.abspath(document.storage_path) == os.path.abspath(file_path):
+                is_primary_local_copy = True
+
+            if os.path.exists(file_path) and not is_primary_local_copy:
                 try:
                     os.remove(file_path)
                     logger.info(f"Auto-cleaned temporary local file '{file_path}' after ingestion")

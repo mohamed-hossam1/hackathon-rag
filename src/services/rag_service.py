@@ -395,83 +395,87 @@ class RAGService:
         else:
             user_prompt = f"Context:\n{context_prompt}\n\nUser Question:\n{query_text}"
 
-        # Step 5: Stream LLM Generation
-        raw_answer_chunks = []
-        for token in self.llm_service.generate_stream(
-            prompt=user_prompt,
-            system_prompt=RAG_SYSTEM_PROMPT,
-            temperature=0.0
-        ):
-            raw_answer_chunks.append(token)
-            token_event = {"delta": token}
-            yield f"event: token\ndata: {json.dumps(token_event)}\n\n"
-        raw_answer = "".join(raw_answer_chunks)
+        try:
+            # Step 5: Stream LLM Generation
+            raw_answer_chunks = []
+            for token in self.llm_service.generate_stream(
+                prompt=user_prompt,
+                system_prompt=RAG_SYSTEM_PROMPT,
+                temperature=0.0
+            ):
+                raw_answer_chunks.append(token)
+                token_event = {"delta": token}
+                yield f"event: token\ndata: {json.dumps(token_event)}\n\n"
+            raw_answer = "".join(raw_answer_chunks)
 
+            # Step 6: Parse Citations
+            citations = self._parse_citations(raw_answer, chunks_map)
 
-        # Step 6: Parse Citations
-        citations = self._parse_citations(raw_answer, chunks_map)
+            # Step 7: Validate Citations & Evidence Scoring
+            validations = self.citation_validator.validate_citations(citations, chunks_map)
+            evidence_score = self.citation_validator.compute_evidence_score(validations)
+            confidence_label = self.citation_validator.get_confidence_label(evidence_score, validations)
 
-        # Step 7: Validate Citations & Evidence Scoring
-        validations = self.citation_validator.validate_citations(citations, chunks_map)
-        evidence_score = self.citation_validator.compute_evidence_score(validations)
-        confidence_label = self.citation_validator.get_confidence_label(evidence_score, validations)
+            # Step 8: Abstention Check
+            is_abstention_text = ABSTENTION_MESSAGE.lower() in raw_answer.lower()
+            if is_abstention_text or evidence_score < self.evidence_threshold:
+                logger.info(f"Abstaining: evidence_score={evidence_score:.2f} < threshold={self.evidence_threshold}")
+                abstain_resp = self._build_abstention_response(
+                    dev=dev,
+                    query_text=query_text,
+                    sem_results=sem_results,
+                    rec_results=rec_results,
+                    bm25_results=bm25_results,
+                    dedup_candidates=dedup_candidates,
+                    reranker_results=reranker_results,
+                    selected_context=selected_context,
+                    validations=validations,
+                    background_tasks=background_tasks
+                )
+                yield f"event: final\ndata: {abstain_resp.model_dump_json()}\n\n"
+                return
 
-        # Step 8: Abstention Check
-        is_abstention_text = ABSTENTION_MESSAGE.lower() in raw_answer.lower()
-        if is_abstention_text or evidence_score < self.evidence_threshold:
-            logger.info(f"Abstaining: evidence_score={evidence_score:.2f} < threshold={self.evidence_threshold}")
-            abstain_resp = self._build_abstention_response(
-                dev=dev,
-                query_text=query_text,
-                sem_results=sem_results,
-                rec_results=rec_results,
-                bm25_results=bm25_results,
-                dedup_candidates=dedup_candidates,
-                reranker_results=reranker_results,
-                selected_context=selected_context,
-                validations=validations,
-                background_tasks=background_tasks
-            )
-            yield f"event: final\ndata: {abstain_resp.model_dump_json()}\n\n"
-            return
+            dev_trace_obj = None
+            if dev:
+                self._async_save_dev_trace(
+                    background_tasks=background_tasks,
+                    query_text=query_text,
+                    abstained=False,
+                    evidence_score=evidence_score,
+                    semantic_chunks=sem_results,
+                    recursive_chunks=rec_results,
+                    bm25_chunks=bm25_results,
+                    reranker_chunks=reranker_results
+                )
+                dev_trace_obj = DevTrace(
+                    semantic_results=sem_results,
+                    recursive_results=rec_results,
+                    bm25_results=bm25_results,
+                    deduplicated_candidates=dedup_candidates,
+                    reranker_results=reranker_results,
+                    selected_context=selected_context,
+                    citation_validations=validations
+                )
 
-        dev_trace_obj = None
-        if dev:
-            self._async_save_dev_trace(
-                background_tasks=background_tasks,
-                query_text=query_text,
-                abstained=False,
+            final_response = RAGResponse(
+                answer=raw_answer,
+                citations=citations,
+                citation_validations=validations,
                 evidence_score=evidence_score,
-                semantic_chunks=sem_results,
-                recursive_chunks=rec_results,
-                bm25_chunks=bm25_results,
-                reranker_chunks=reranker_results
-            )
-            dev_trace_obj = DevTrace(
-                semantic_results=sem_results,
-                recursive_results=rec_results,
-                bm25_results=bm25_results,
-                deduplicated_candidates=dedup_candidates,
-                reranker_results=reranker_results,
-                selected_context=selected_context,
-                citation_validations=validations
+                confidence_label=confidence_label,
+                abstained=False,
+                disclaimer=DEFAULT_MEDICAL_DISCLAIMER,
+                has_personal_info=has_p_info,
+                extracted_personal_info=extracted_p_info,
+                memory_prompt=mem_prompt,
+                dev_trace=dev_trace_obj
             )
 
-        final_response = RAGResponse(
-            answer=raw_answer,
-            citations=citations,
-            citation_validations=validations,
-            evidence_score=evidence_score,
-            confidence_label=confidence_label,
-            abstained=False,
-            disclaimer=DEFAULT_MEDICAL_DISCLAIMER,
-            has_personal_info=has_p_info,
-            extracted_personal_info=extracted_p_info,
-            memory_prompt=mem_prompt,
-            dev_trace=dev_trace_obj
-        )
-
-        yield f"event: final\ndata: {final_response.model_dump_json()}\n\n"
+            yield f"event: final\ndata: {final_response.model_dump_json()}\n\n"
+        except Exception as exc:
+            logger.error(f"Error during streaming RAG generation: {exc}", exc_info=True)
+            err_event = {"error": str(exc), "message": "Streaming generation failed"}
+            yield f"event: error\ndata: {json.dumps(err_event)}\n\n"
 
 
     @staticmethod
