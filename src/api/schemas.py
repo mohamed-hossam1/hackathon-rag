@@ -12,6 +12,8 @@ class RAGRequest(BaseModel):
     """Request payload for POST /rag endpoint."""
     query: str = Field(..., min_length=1, description="Medical query or question")
     dev: bool = Field(default=False, description="Enable dev mode to return step-by-step DevTrace")
+    personal_context: Optional[str] = Field(default=None, description="Saved personal medical context of the user")
+
 
 
 class UploadResponse(BaseModel):

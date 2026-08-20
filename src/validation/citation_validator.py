@@ -108,6 +108,27 @@ class CitationValidator:
                 )
                 continue
 
+            # Deterministic Check 3: High direct text match or word overlap check
+            claim_clean = re.sub(r"[^\w\s]", "", citation.claim.lower()).strip()
+            chunk_clean = re.sub(r"[^\w\s]", "", chunk.text.lower()).strip()
+            claim_words = [w for w in claim_clean.split() if len(w) > 2]
+            if claim_clean and chunk_clean and (
+                claim_clean in chunk_clean or (
+                    len(claim_words) >= 3 and
+                    sum(1 for word in claim_words if word in chunk_clean) / len(claim_words) >= 0.85
+                )
+            ):
+                results_map[idx] = CitationValidationResult(
+                    claim=citation.claim,
+                    chunk_id=citation.chunk_id,
+                    chunk_text=chunk.text,
+                    supported=True,
+                    status="supports",
+                    risk_level=risk_level,
+                    reason="High direct text match found in source chunk."
+                )
+                continue
+
             # Add to batch for LLM semantic validation
             batch_items_to_validate.append({
                 "batch_index": idx,

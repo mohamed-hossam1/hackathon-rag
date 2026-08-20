@@ -1,7 +1,8 @@
 import json
 import logging
 import re
-from typing import Dict, List, Optional
+from concurrent.futures import ThreadPoolExecutor
+from typing import Dict, List, Optional, Tuple, Any
 
 from src.config import get_config
 from src.db.supabase_service import SupabaseService
@@ -79,13 +80,42 @@ class RAGService:
         )
         self.top_k_retrieval = config.RETRIEVAL_TOP_K
         self.top_k_rerank = config.RERANKER_TOP_K
+        self._executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="rag_parallel")
 
-    def query(self, query_text: str, dev: bool = False) -> RAGResponse:
+    def _parallel_retrieve(
+        self, query_text: str
+    ) -> Tuple[List[RetrievalResult], List[RetrievalResult], List[RetrievalResult]]:
+        """Executes semantic, recursive, and BM25 retrievals concurrently using a thread pool."""
+        fut_sem = self._executor.submit(self.semantic_retriever.retrieve, query_text, self.top_k_retrieval)
+        fut_rec = self._executor.submit(self.recursive_retriever.retrieve, query_text, self.top_k_retrieval)
+        fut_bm25 = self._executor.submit(self.bm25_retriever.retrieve, query_text, self.top_k_retrieval)
+
+        sem_results = fut_sem.result()
+        rec_results = fut_rec.result()
+        bm25_results = fut_bm25.result()
+
+        return sem_results, rec_results, bm25_results
+
+    def _async_save_dev_trace(self, background_tasks: Optional[Any] = None, **kwargs) -> None:
+        """Asynchronously dispatches dev trace saving to Supabase via FastAPI BackgroundTasks or ThreadPoolExecutor."""
+        if background_tasks is not None and hasattr(background_tasks, "add_task"):
+            background_tasks.add_task(self.supabase_service.save_dev_trace, **kwargs)
+        else:
+            self._executor.submit(self.supabase_service.save_dev_trace, **kwargs)
+
+    def query(
+        self,
+        query_text: str,
+        dev: bool = False,
+        personal_context: Optional[str] = None,
+        background_tasks: Optional[Any] = None
+    ) -> RAGResponse:
         """Executes full RAG query pipeline.
 
         Args:
             query_text: User medical question text.
             dev: If True, attaches detailed step-by-step DevTrace.
+            personal_context: Saved user personal memory/context text.
 
         Returns:
             RAGResponse object.
@@ -100,12 +130,10 @@ class RAGService:
                 disclaimer=DEFAULT_MEDICAL_DISCLAIMER
             )
 
-        logger.info(f"Executing RAG query: '{query_text[:50]}...' (dev={dev})")
+        logger.info(f"Executing RAG query: '{query_text[:50]}...' (dev={dev}, personal_context={bool(personal_context)})")
 
-        # Step 1: Tri-Hybrid Retrieval
-        sem_results = self.semantic_retriever.retrieve(query_text, top_k=self.top_k_retrieval)
-        rec_results = self.recursive_retriever.retrieve(query_text, top_k=self.top_k_retrieval)
-        bm25_results = self.bm25_retriever.retrieve(query_text, top_k=self.top_k_retrieval)
+        # Step 1: Tri-Hybrid Retrieval (Parallelized via ThreadPoolExecutor)
+        sem_results, rec_results, bm25_results = self._parallel_retrieve(query_text)
 
         # Step 1.5: Normalize scores per retriever to [0, 1] before merging
         sem_results = self._normalize_scores(sem_results)
@@ -131,7 +159,8 @@ class RAGService:
                 bm25_results=bm25_results,
                 dedup_candidates=dedup_candidates,
                 reranker_results=reranker_results,
-                selected_context=[]
+                selected_context=[],
+                background_tasks=background_tasks
             )
 
         # Step 4: Assemble Prompt Context
@@ -150,7 +179,10 @@ class RAGService:
             )
 
         context_prompt = "\n".join(context_str_blocks)
-        user_prompt = f"Context:\n{context_prompt}\n\nUser Question:\n{query_text}"
+        if personal_context and personal_context.strip():
+            user_prompt = f"User Personal Context & Medical Profile:\n{personal_context.strip()}\n\nContext:\n{context_prompt}\n\nUser Question:\n{query_text}"
+        else:
+            user_prompt = f"Context:\n{context_prompt}\n\nUser Question:\n{query_text}"
 
         # Step 5: Generate Answer via streaming
         raw_answer = "".join(
@@ -160,7 +192,6 @@ class RAGService:
                 temperature=0.0
             )
         )
-
 
         # Step 6: Parse Citations
         citations = self._parse_citations(raw_answer, chunks_map)
@@ -183,13 +214,15 @@ class RAGService:
                 dedup_candidates=dedup_candidates,
                 reranker_results=reranker_results,
                 selected_context=selected_context,
-                validations=validations
+                validations=validations,
+                background_tasks=background_tasks
             )
 
         # Clean citation tags from answer text for clean user display if desired, or preserve inline
         dev_trace_obj = None
         if dev:
-            self.supabase_service.save_dev_trace(
+            self._async_save_dev_trace(
+                background_tasks=background_tasks,
                 query_text=query_text,
                 abstained=False,
                 evidence_score=evidence_score,
@@ -219,7 +252,13 @@ class RAGService:
             dev_trace=dev_trace_obj
         )
 
-    async def query_stream(self, query_text: str, dev: bool = False):
+    async def query_stream(
+        self,
+        query_text: str,
+        dev: bool = False,
+        personal_context: Optional[str] = None,
+        background_tasks: Optional[Any] = None
+    ):
         """Executes full RAG query pipeline and yields SSE events as answer is generated."""
         if not query_text.strip():
             resp = RAGResponse(
@@ -233,12 +272,10 @@ class RAGService:
             yield f"event: final\ndata: {resp.model_dump_json()}\n\n"
             return
 
-        logger.info(f"Executing RAG query stream: '{query_text[:50]}...' (dev={dev})")
+        logger.info(f"Executing RAG query stream: '{query_text[:50]}...' (dev={dev}, personal_context={bool(personal_context)})")
 
-        # Step 1: Tri-Hybrid Retrieval
-        sem_results = self.semantic_retriever.retrieve(query_text, top_k=self.top_k_retrieval)
-        rec_results = self.recursive_retriever.retrieve(query_text, top_k=self.top_k_retrieval)
-        bm25_results = self.bm25_retriever.retrieve(query_text, top_k=self.top_k_retrieval)
+        # Step 1: Tri-Hybrid Retrieval (Parallelized via ThreadPoolExecutor)
+        sem_results, rec_results, bm25_results = self._parallel_retrieve(query_text)
 
         # Step 1.5: Normalize scores per retriever to [0, 1] before merging
         sem_results = self._normalize_scores(sem_results)
@@ -263,7 +300,8 @@ class RAGService:
                 bm25_results=bm25_results,
                 dedup_candidates=dedup_candidates,
                 reranker_results=reranker_results,
-                selected_context=[]
+                selected_context=[],
+                background_tasks=background_tasks
             )
             yield f"event: final\ndata: {abstain_resp.model_dump_json()}\n\n"
             return
@@ -291,7 +329,10 @@ class RAGService:
             )
 
         context_prompt = "\n".join(context_str_blocks)
-        user_prompt = f"Context:\n{context_prompt}\n\nUser Question:\n{query_text}"
+        if personal_context and personal_context.strip():
+            user_prompt = f"User Personal Context & Medical Profile:\n{personal_context.strip()}\n\nContext:\n{context_prompt}\n\nUser Question:\n{query_text}"
+        else:
+            user_prompt = f"Context:\n{context_prompt}\n\nUser Question:\n{query_text}"
 
         # Step 5: Stream LLM Generation
         raw_answer_chunks = []
@@ -327,14 +368,16 @@ class RAGService:
                 dedup_candidates=dedup_candidates,
                 reranker_results=reranker_results,
                 selected_context=selected_context,
-                validations=validations
+                validations=validations,
+                background_tasks=background_tasks
             )
             yield f"event: final\ndata: {abstain_resp.model_dump_json()}\n\n"
             return
 
         dev_trace_obj = None
         if dev:
-            self.supabase_service.save_dev_trace(
+            self._async_save_dev_trace(
+                background_tasks=background_tasks,
                 query_text=query_text,
                 abstained=False,
                 evidence_score=evidence_score,
@@ -461,12 +504,14 @@ class RAGService:
         dedup_candidates: List[RetrievalResult],
         reranker_results: List[RerankResult],
         selected_context: List[RerankResult],
-        validations: Optional[List[CitationValidationResult]] = None
+        validations: Optional[List[CitationValidationResult]] = None,
+        background_tasks: Optional[Any] = None
     ) -> RAGResponse:
         """Helper to construct an abstention RAGResponse."""
         dev_trace_obj = None
         if dev:
-            self.supabase_service.save_dev_trace(
+            self._async_save_dev_trace(
+                background_tasks=background_tasks,
                 query_text=query_text,
                 abstained=True,
                 evidence_score=0.0,

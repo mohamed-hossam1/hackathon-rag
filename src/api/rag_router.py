@@ -1,5 +1,5 @@
 import logging
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
 from fastapi.responses import StreamingResponse
 
 from src.api.schemas import ErrorResponse, RAGRequest
@@ -28,6 +28,7 @@ def get_rag_service() -> RAGService:
 )
 async def query_rag(
     request: RAGRequest,
+    background_tasks: BackgroundTasks,
     rag_service: RAGService = Depends(get_rag_service)
 ) -> RAGResponse:
     """Executes medical RAG pipeline query and returns grounded answer with citations and confidence metrics."""
@@ -39,7 +40,12 @@ async def query_rag(
         )
 
     try:
-        response = rag_service.query(query_text=request.query, dev=request.dev)
+        response = rag_service.query(
+            query_text=request.query,
+            dev=request.dev,
+            personal_context=request.personal_context,
+            background_tasks=background_tasks
+        )
         return response
     except RuntimeError as rerr:
         err_msg = str(rerr).lower()
@@ -80,6 +86,7 @@ async def query_rag(
 )
 async def query_rag_stream(
     request: RAGRequest,
+    background_tasks: BackgroundTasks,
     rag_service: RAGService = Depends(get_rag_service)
 ) -> StreamingResponse:
     """Streams medical RAG pipeline answer token-by-token using Server-Sent Events (SSE)."""
@@ -91,7 +98,12 @@ async def query_rag_stream(
         )
 
     try:
-        generator = rag_service.query_stream(query_text=request.query, dev=request.dev)
+        generator = rag_service.query_stream(
+            query_text=request.query,
+            dev=request.dev,
+            personal_context=request.personal_context,
+            background_tasks=background_tasks
+        )
         return StreamingResponse(generator, media_type="text/event-stream")
     except Exception as exc:
         logger.error(f"Unexpected exception during /rag/stream query: {exc}", exc_info=True)
