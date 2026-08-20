@@ -1,7 +1,10 @@
 import logging
+from typing import Optional
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
 from fastapi.responses import StreamingResponse
 
+from src.api.auth_router import get_optional_current_user
+from src.api.auth_schemas import UserResponse
 from src.api.schemas import ErrorResponse, RAGRequest
 from src.models.response import RAGResponse
 from src.services.rag_service import RAGService
@@ -29,6 +32,7 @@ def get_rag_service() -> RAGService:
 async def query_rag(
     request: RAGRequest,
     background_tasks: BackgroundTasks,
+    current_user: Optional[UserResponse] = Depends(get_optional_current_user),
     rag_service: RAGService = Depends(get_rag_service)
 ) -> RAGResponse:
     """Executes medical RAG pipeline query and returns grounded answer with citations and confidence metrics."""
@@ -40,10 +44,12 @@ async def query_rag(
         )
 
     try:
+        user_id = current_user.user_id if current_user else None
         response = rag_service.query(
             query_text=request.query,
             dev=request.dev,
             personal_context=request.personal_context,
+            user_id=user_id,
             background_tasks=background_tasks
         )
         return response
@@ -87,6 +93,7 @@ async def query_rag(
 async def query_rag_stream(
     request: RAGRequest,
     background_tasks: BackgroundTasks,
+    current_user: Optional[UserResponse] = Depends(get_optional_current_user),
     rag_service: RAGService = Depends(get_rag_service)
 ) -> StreamingResponse:
     """Streams medical RAG pipeline answer token-by-token using Server-Sent Events (SSE)."""
@@ -98,10 +105,12 @@ async def query_rag_stream(
         )
 
     try:
+        user_id = current_user.user_id if current_user else None
         generator = rag_service.query_stream(
             query_text=request.query,
             dev=request.dev,
             personal_context=request.personal_context,
+            user_id=user_id,
             background_tasks=background_tasks
         )
         return StreamingResponse(generator, media_type="text/event-stream")
@@ -111,4 +120,5 @@ async def query_rag_stream(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Internal server error"
         ) from exc
+
 

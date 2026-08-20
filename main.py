@@ -7,6 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from mangum import Mangum
 
+from src.api.auth_router import router as auth_router
 from src.api.dev_router import router as dev_router
 from src.api.eval_router import router as eval_router
 from src.api.health_router import router as health_router
@@ -149,13 +150,23 @@ app = FastAPI(
 # Configure CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=[
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+        "http://localhost:3001",
+        "http://127.0.0.1:3001",
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+        "http://localhost:8000",
+    ],
+    allow_origin_regex=r"https?://.*",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
 # Register API Routers
+app.include_router(auth_router)
 app.include_router(rag_router)
 app.include_router(upload_router)
 app.include_router(health_router)

@@ -103,11 +103,41 @@ class RAGService:
         else:
             self._executor.submit(self.supabase_service.save_dev_trace, **kwargs)
 
+    def _detect_personal_info(self, query_text: str) -> Tuple[bool, Optional[str], Optional[str]]:
+        """Detects if English user query contains personal medical history, condition, allergies, or medications.
+
+        Returns:
+            Tuple of (has_personal_info, extracted_personal_info, memory_prompt)
+        """
+        text = query_text.strip()
+        if not text:
+            return False, None, None
+
+        # Regex patterns for personal medical indicators in English
+        pattern = r"\b(i\s+have|i\s+am|i'm|my|i\s+take|i\s+was\s+diagnosed|i\s+suffer\s+from|allergic\s+to|diagnosed\s+with|taking|history\s+of)\b"
+        matches_pattern = bool(re.search(pattern, text, re.IGNORECASE))
+
+        medical_keywords = [
+            "diabetes", "hypertension", "pressure", "asthma", "allergy", "allergic", "metformin",
+            "aspirin", "insulin", "penicillin", "pregnant", "cardiac", "kidney", "liver", "heart",
+            "cholesterol", "stroke", "cancer", "seizure", "migraine", "arthritis", "thyroid"
+        ]
+
+        matches_keyword = any(kw in text.lower() for kw in medical_keywords)
+
+        if matches_pattern and matches_keyword:
+            extracted = text.strip()
+            prompt = f"Would you like to save this medical detail ('{extracted}') for your future chat sessions?"
+            return True, extracted, prompt
+
+        return False, None, None
+
     def query(
         self,
         query_text: str,
         dev: bool = False,
         personal_context: Optional[str] = None,
+        user_id: Optional[str] = None,
         background_tasks: Optional[Any] = None
     ) -> RAGResponse:
         """Executes full RAG query pipeline.
@@ -116,10 +146,13 @@ class RAGService:
             query_text: User medical question text.
             dev: If True, attaches detailed step-by-step DevTrace.
             personal_context: Saved user personal memory/context text.
+            user_id: Optional authenticated user ID for auto-fetching saved memories.
 
         Returns:
             RAGResponse object.
         """
+        has_p_info, extracted_p_info, mem_prompt = self._detect_personal_info(query_text)
+
         if not query_text.strip():
             return RAGResponse(
                 answer=ABSTENTION_MESSAGE,
@@ -127,8 +160,19 @@ class RAGService:
                 evidence_score=0.0,
                 confidence_label=ConfidenceLabel.INSUFFICIENT,
                 abstained=True,
-                disclaimer=DEFAULT_MEDICAL_DISCLAIMER
+                disclaimer=DEFAULT_MEDICAL_DISCLAIMER,
+                has_personal_info=has_p_info,
+                extracted_personal_info=extracted_p_info,
+                memory_prompt=mem_prompt
             )
+
+        # Auto-hydrate user memories if user_id is passed and personal_context is empty
+        if user_id and not personal_context:
+            memories = self.supabase_service.get_user_memories(user_id)
+            if memories:
+                m_texts = [f"- {m.get('memory_text', '').strip()}" for m in memories if m.get('memory_text', '').strip()]
+                if m_texts:
+                    personal_context = "\n".join(m_texts)
 
         logger.info(f"Executing RAG query: '{query_text[:50]}...' (dev={dev}, personal_context={bool(personal_context)})")
 
@@ -249,6 +293,9 @@ class RAGService:
             confidence_label=confidence_label,
             abstained=False,
             disclaimer=DEFAULT_MEDICAL_DISCLAIMER,
+            has_personal_info=has_p_info,
+            extracted_personal_info=extracted_p_info,
+            memory_prompt=mem_prompt,
             dev_trace=dev_trace_obj
         )
 
@@ -257,9 +304,12 @@ class RAGService:
         query_text: str,
         dev: bool = False,
         personal_context: Optional[str] = None,
+        user_id: Optional[str] = None,
         background_tasks: Optional[Any] = None
     ):
         """Executes full RAG query pipeline and yields SSE events as answer is generated."""
+        has_p_info, extracted_p_info, mem_prompt = self._detect_personal_info(query_text)
+
         if not query_text.strip():
             resp = RAGResponse(
                 answer=ABSTENTION_MESSAGE,
@@ -267,10 +317,21 @@ class RAGService:
                 evidence_score=0.0,
                 confidence_label=ConfidenceLabel.INSUFFICIENT,
                 abstained=True,
-                disclaimer=DEFAULT_MEDICAL_DISCLAIMER
+                disclaimer=DEFAULT_MEDICAL_DISCLAIMER,
+                has_personal_info=has_p_info,
+                extracted_personal_info=extracted_p_info,
+                memory_prompt=mem_prompt
             )
             yield f"event: final\ndata: {resp.model_dump_json()}\n\n"
             return
+
+        # Auto-hydrate user memories if user_id is passed and personal_context is empty
+        if user_id and not personal_context:
+            memories = self.supabase_service.get_user_memories(user_id)
+            if memories:
+                m_texts = [f"- {m.get('memory_text', '').strip()}" for m in memories if m.get('memory_text', '').strip()]
+                if m_texts:
+                    personal_context = "\n".join(m_texts)
 
         logger.info(f"Executing RAG query stream: '{query_text[:50]}...' (dev={dev}, personal_context={bool(personal_context)})")
 
@@ -404,6 +465,9 @@ class RAGService:
             confidence_label=confidence_label,
             abstained=False,
             disclaimer=DEFAULT_MEDICAL_DISCLAIMER,
+            has_personal_info=has_p_info,
+            extracted_personal_info=extracted_p_info,
+            memory_prompt=mem_prompt,
             dev_trace=dev_trace_obj
         )
 
@@ -508,6 +572,7 @@ class RAGService:
         background_tasks: Optional[Any] = None
     ) -> RAGResponse:
         """Helper to construct an abstention RAGResponse."""
+        has_p_info, extracted_p_info, mem_prompt = self._detect_personal_info(query_text)
         dev_trace_obj = None
         if dev:
             self._async_save_dev_trace(
@@ -538,5 +603,8 @@ class RAGService:
             confidence_label=ConfidenceLabel.INSUFFICIENT,
             abstained=True,
             disclaimer=DEFAULT_MEDICAL_DISCLAIMER,
+            has_personal_info=has_p_info,
+            extracted_personal_info=extracted_p_info,
+            memory_prompt=mem_prompt,
             dev_trace=dev_trace_obj
         )

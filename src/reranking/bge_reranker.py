@@ -15,8 +15,14 @@ class BGEReranker:
         config = get_config()
         self.model_name = model_name or config.RERANKER_MODEL
         self.top_k_default = config.RERANKER_TOP_K
-        logger.info(f"Loading CrossEncoder reranker model: {self.model_name}")
-        self.model = CrossEncoder(self.model_name)
+        self._model: Optional[CrossEncoder] = None
+
+    @property
+    def model(self) -> CrossEncoder:
+        if self._model is None:
+            logger.info(f"Loading CrossEncoder reranker model lazily: {self.model_name}")
+            self._model = CrossEncoder(self.model_name)
+        return self._model
 
     def rerank(
         self,

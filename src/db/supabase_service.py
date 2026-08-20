@@ -352,3 +352,149 @@ class SupabaseService:
             logger.error(f"Error fetching all chunks from Supabase: {err}")
             return []
 
+    # =========================================================================
+    # Supabase Authentication & User Memory Methods
+    # =========================================================================
+
+    def signup_user(self, email: str, password: str, full_name: Optional[str] = None) -> Dict[str, Any]:
+        """Signs up a new user via Supabase Auth API endpoint /auth/v1/signup."""
+        if not self.is_configured:
+            raise RuntimeError("Supabase credentials not configured in environment")
+
+        payload: Dict[str, Any] = {
+            "email": email,
+            "password": password
+        }
+        if full_name:
+            payload["data"] = {"full_name": full_name}
+
+        headers = {
+            "apikey": self.key,
+            "Content-Type": "application/json"
+        }
+
+        resp = httpx.post(
+            f"{self.url}/auth/v1/signup",
+            headers=headers,
+            json=payload,
+            timeout=10.0
+        )
+        if resp.status_code >= 400:
+            err_data = resp.json() if resp.headers.get("content-type", "").startswith("application/json") else {}
+            msg = err_data.get("msg") or err_data.get("error_description") or err_data.get("message") or f"Signup failed with status {resp.status_code}"
+            logger.error(f"Supabase signup error: {msg}")
+            raise ValueError(msg)
+
+        return resp.json()
+
+    def login_user(self, email: str, password: str) -> Dict[str, Any]:
+        """Logs in an existing user via Supabase Auth API endpoint /auth/v1/token?grant_type=password."""
+        if not self.is_configured:
+            raise RuntimeError("Supabase credentials not configured in environment")
+
+        payload = {
+            "email": email,
+            "password": password
+        }
+        headers = {
+            "apikey": self.key,
+            "Content-Type": "application/json"
+        }
+
+        resp = httpx.post(
+            f"{self.url}/auth/v1/token?grant_type=password",
+            headers=headers,
+            json=payload,
+            timeout=10.0
+        )
+        if resp.status_code >= 400:
+            err_data = resp.json() if resp.headers.get("content-type", "").startswith("application/json") else {}
+            msg = err_data.get("error_description") or err_data.get("msg") or err_data.get("message") or "Invalid login credentials"
+            logger.error(f"Supabase login error: {msg}")
+            raise ValueError(msg)
+
+        return resp.json()
+
+    def get_user_from_token(self, token: str) -> Dict[str, Any]:
+        """Validates Bearer token and returns user profile data from Supabase Auth /auth/v1/user."""
+        if not self.is_configured:
+            raise RuntimeError("Supabase credentials not configured in environment")
+
+        headers = {
+            "apikey": self.key,
+            "Authorization": f"Bearer {token}"
+        }
+
+        resp = httpx.get(
+            f"{self.url}/auth/v1/user",
+            headers=headers,
+            timeout=10.0
+        )
+        if resp.status_code >= 400:
+            raise ValueError("Invalid or expired authentication token")
+
+        return resp.json()
+
+    def save_user_memory(self, user_id: str, memory_text: str) -> Dict[str, Any]:
+        """Saves a personal context memory item for a user into Supabase user_memories table."""
+        if not self.is_configured:
+            raise RuntimeError("Supabase credentials not configured in environment")
+
+        headers = self._get_headers()
+        headers["Prefer"] = "return=representation"
+
+        payload = {
+            "user_id": user_id,
+            "memory_text": memory_text.strip()
+        }
+
+        resp = httpx.post(
+            f"{self.url}/rest/v1/user_memories",
+            headers=headers,
+            json=payload,
+            timeout=10.0
+        )
+        if resp.status_code >= 400:
+            logger.error(f"Error saving user memory to Supabase: {resp.text}")
+            raise RuntimeError(f"Failed to save user memory: {resp.text}")
+
+        created = resp.json()
+        if isinstance(created, list) and created:
+            return created[0]
+        return created
+
+    def get_user_memories(self, user_id: str) -> List[Dict[str, Any]]:
+        """Retrieves all saved personal context memory items for a specific user from Supabase."""
+        if not self.is_configured:
+            return []
+
+        try:
+            resp = httpx.get(
+                f"{self.url}/rest/v1/user_memories?user_id=eq.{user_id}&select=*&order=created_at.desc",
+                headers=self._get_headers(),
+                timeout=10.0
+            )
+            resp.raise_for_status()
+            return resp.json()
+        except Exception as err:
+            logger.error(f"Error fetching user memories for user_id={user_id}: {err}")
+            return []
+
+    def delete_user_memory(self, user_id: str, memory_id: str) -> bool:
+        """Deletes a specific user memory item from Supabase user_memories table."""
+        if not self.is_configured:
+            return False
+
+        try:
+            resp = httpx.delete(
+                f"{self.url}/rest/v1/user_memories?id=eq.{memory_id}&user_id=eq.{user_id}",
+                headers=self._get_headers(),
+                timeout=10.0
+            )
+            resp.raise_for_status()
+            return True
+        except Exception as err:
+            logger.error(f"Error deleting user memory id={memory_id}: {err}")
+            return False
+
+

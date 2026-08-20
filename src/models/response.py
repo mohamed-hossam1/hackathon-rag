@@ -39,4 +39,8 @@ class RAGResponse(BaseModel):
     confidence_label: ConfidenceLabel = Field(..., description="Confidence label based on evidence score")
     abstained: bool = Field(..., description="True if system abstained due to insufficient evidence")
     disclaimer: str = Field(default=DEFAULT_MEDICAL_DISCLAIMER, description="Mandatory medical safety disclaimer")
+    has_personal_info: bool = Field(default=False, description="True if query contains user personal medical information")
+    extracted_personal_info: Optional[str] = Field(default=None, description="Extracted user personal medical info summary")
+    memory_prompt: Optional[str] = Field(default=None, description="Prompt text asking user to confirm saving personal info for future chats")
     dev_trace: Optional[DevTrace] = Field(default=None, exclude=True, description="Diagnostic step-by-step trace when dev=true (excluded from response)")
+
