@@ -567,3 +567,221 @@ class SupabaseService:
             _IN_MEMORY_MEMORIES[user_id] = [m for m in _IN_MEMORY_MEMORIES[user_id] if m.get("id") != memory_id]
             return True
         return False
+
+    # =========================================================================
+    # Chat & Message Persistence Methods
+    # =========================================================================
+
+    def create_chat(self, user_id: str, title: Optional[str] = None) -> Optional[Dict[str, Any]]:
+        """Creates a new chat record for a user. Returns the created chat record or None."""
+        import uuid
+        chat_obj = {
+            "id": str(uuid.uuid4()),
+            "user_id": user_id,
+            "title": (title or "Untitled Chat").strip(),
+            "pinned": False,
+            "created_at": None,
+            "last_message_at": None,
+            "deleted": False,
+        }
+
+        if self.is_configured:
+            try:
+                headers = self._get_headers()
+                headers["Prefer"] = "return=representation"
+                payload = {
+                    "user_id": user_id,
+                    "title": chat_obj["title"],
+                    "pinned": False
+                }
+                resp = httpx.post(
+                    f"{self.url}/rest/v1/chats",
+                    headers=headers,
+                    json=payload,
+                    timeout=10.0
+                )
+                resp.raise_for_status()
+                created = resp.json()
+                if isinstance(created, list) and created:
+                    return created[0]
+                return created
+            except Exception as exc:
+                logger.warning(f"Failed to create chat in Supabase: {exc}. Falling back to in-memory.")
+
+        # Dev fallback
+        if user_id not in _IN_MEMORY_MEMORIES:
+            _IN_MEMORY_MEMORIES[user_id] = []
+        _IN_MEMORY_MEMORIES[user_id].insert(0, chat_obj)
+        return chat_obj
+
+    def list_user_chats(self, user_id: str, limit: int = 100) -> List[Dict[str, Any]]:
+        """Lists non-deleted chats for a user ordered by pinned desc, last_message_at desc, created_at desc."""
+        if self.is_configured:
+            try:
+                resp = httpx.get(
+                    f"{self.url}/rest/v1/chats?user_id=eq.{user_id}&deleted=eq.false&select=*&order=pinned.desc,last_message_at.desc,created_at.desc&limit={limit}",
+                    headers=self._get_headers(),
+                    timeout=10.0
+                )
+                resp.raise_for_status()
+                return resp.json()
+            except Exception as exc:
+                logger.error(f"Error listing chats for user_id={user_id}: {exc}")
+
+        # Dev fallback: return any in-memory chats for user (stored in user memories map)
+        # We store chats in _IN_MEMORY_MEMORIES[user_id] prefix for fallback convenience.
+        raw = _IN_MEMORY_MEMORIES.get(user_id, [])
+        # Filter objects that look like chats (have 'title')
+        chats = [c for c in raw if isinstance(c, dict) and c.get("title") is not None]
+        return chats[:limit]
+
+    def add_message(self, chat_id: str, sender: str, content: str, metadata: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
+        """Adds a message to a chat and updates the chat's last_message_at timestamp."""
+        import uuid, datetime
+        message_obj = {
+            "id": str(uuid.uuid4()),
+            "chat_id": chat_id,
+            "sender": sender,
+            "content": content,
+            "metadata": metadata or {},
+            "created_at": datetime.datetime.now(datetime.timezone.utc).isoformat()
+        }
+
+        if self.is_configured:
+            try:
+                headers = self._get_headers()
+                headers["Prefer"] = "return=representation"
+                payload = {
+                    "chat_id": chat_id,
+                    "sender": sender,
+                    "content": content,
+                    "metadata": metadata or {}
+                }
+                resp = httpx.post(
+                    f"{self.url}/rest/v1/chat_messages",
+                    headers=headers,
+                    json=payload,
+                    timeout=10.0
+                )
+                resp.raise_for_status()
+                created = resp.json()
+
+                # Update chat last_message_at
+                try:
+                    patch_payload = {"last_message_at": message_obj["created_at"]}
+                    httpx.patch(
+                        f"{self.url}/rest/v1/chats?id=eq.{chat_id}",
+                        headers=self._get_headers(),
+                        json=patch_payload,
+                        timeout=5.0
+                    )
+                except Exception:
+                    pass
+
+                if isinstance(created, list) and created:
+                    return created[0]
+                return created
+            except Exception as exc:
+                logger.error(f"Failed to add message to Supabase for chat_id={chat_id}: {exc}")
+
+        # Dev fallback: store in-memory under a special key
+        key = f"_chat_msgs_{chat_id}"
+        if key not in _IN_MEMORY_MEMORIES:
+            _IN_MEMORY_MEMORIES[key] = []
+        _IN_MEMORY_MEMORIES[key].append(message_obj)
+
+        # Also attempt to update in-memory chat last_message_at
+        for u, arr in _IN_MEMORY_MEMORIES.items():
+            for item in arr:
+                if isinstance(item, dict) and item.get("id") == chat_id:
+                    item["last_message_at"] = message_obj["created_at"]
+        return message_obj
+
+    def get_chat_messages(self, chat_id: str, limit: int = 100, offset: int = 0) -> List[Dict[str, Any]]:
+        """Retrieves messages for a chat ordered by created_at ascending."""
+        if self.is_configured:
+            try:
+                resp = httpx.get(
+                    f"{self.url}/rest/v1/chat_messages?chat_id=eq.{chat_id}&select=*&order=created_at.asc&limit={limit}&offset={offset}",
+                    headers=self._get_headers(),
+                    timeout=10.0
+                )
+                resp.raise_for_status()
+                return resp.json()
+            except Exception as exc:
+                logger.error(f"Error fetching messages for chat_id={chat_id}: {exc}")
+
+        key = f"_chat_msgs_{chat_id}"
+        return _IN_MEMORY_MEMORIES.get(key, [])[offset: offset + limit]
+
+    def soft_delete_chat(self, chat_id: str) -> bool:
+        """Soft-deletes a chat (sets deleted=true)."""
+        if self.is_configured:
+            try:
+                resp = httpx.patch(
+                    f"{self.url}/rest/v1/chats?id=eq.{chat_id}",
+                    headers=self._get_headers(),
+                    json={"deleted": True},
+                    timeout=10.0
+                )
+                resp.raise_for_status()
+                return True
+            except Exception as exc:
+                logger.error(f"Error soft-deleting chat_id={chat_id}: {exc}")
+                return False
+
+        # Dev fallback: remove from in-memory list
+        removed = False
+        for u, arr in list(_IN_MEMORY_MEMORIES.items()):
+            new_arr = [i for i in arr if not (isinstance(i, dict) and i.get("id") == chat_id)]
+            if len(new_arr) != len(arr):
+                _IN_MEMORY_MEMORIES[u] = new_arr
+                removed = True
+        return removed
+
+    def pin_chat(self, chat_id: str, pinned: bool = True) -> bool:
+        """Sets the pinned flag on a chat."""
+        if self.is_configured:
+            try:
+                resp = httpx.patch(
+                    f"{self.url}/rest/v1/chats?id=eq.{chat_id}",
+                    headers=self._get_headers(),
+                    json={"pinned": bool(pinned)},
+                    timeout=10.0
+                )
+                resp.raise_for_status()
+                return True
+            except Exception as exc:
+                logger.error(f"Error pinning/unpinning chat_id={chat_id}: {exc}")
+                return False
+
+        # Dev fallback
+        for u, arr in _IN_MEMORY_MEMORIES.items():
+            for item in arr:
+                if isinstance(item, dict) and item.get("id") == chat_id:
+                    item["pinned"] = bool(pinned)
+                    return True
+        return False
+
+    def rename_chat(self, chat_id: str, title: str) -> bool:
+        """Renames a chat."""
+        if self.is_configured:
+            try:
+                resp = httpx.patch(
+                    f"{self.url}/rest/v1/chats?id=eq.{chat_id}",
+                    headers=self._get_headers(),
+                    json={"title": title},
+                    timeout=10.0
+                )
+                resp.raise_for_status()
+                return True
+            except Exception as exc:
+                logger.error(f"Error renaming chat_id={chat_id}: {exc}")
+                return False
+
+        for u, arr in _IN_MEMORY_MEMORIES.items():
+            for item in arr:
+                if isinstance(item, dict) and item.get("id") == chat_id:
+                    item["title"] = title
+                    return True
+        return False
