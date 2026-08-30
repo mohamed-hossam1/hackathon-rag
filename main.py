@@ -12,6 +12,7 @@ from src.api.dev_router import router as dev_router
 from src.api.eval_router import router as eval_router
 from src.api.health_router import router as health_router
 from src.api.rag_router import router as rag_router, get_rag_service
+from src.api.chat_router import router as chat_router
 from src.api.upload_router import (
     router as upload_router,
     get_document_store,
@@ -168,6 +169,7 @@ app.add_middleware(
 
 # Register API Routers
 app.include_router(auth_router)
+app.include_router(chat_router)
 app.include_router(rag_router)
 app.include_router(upload_router)
 app.include_router(health_router)
